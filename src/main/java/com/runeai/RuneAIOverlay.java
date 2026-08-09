@@ -111,7 +111,7 @@ public class RuneAIOverlay extends Overlay
 			{
 				continue;
 			}
-			if (npc.getInteracting() == lp)
+			if (npc.getInteracting() == lp && npc.getCombatLevel() > 0)
 			{
 				outliner.drawOutline(npc, 2, DANGER, 4);
 				labelActor(g, npc, npc.getName(), DANGER);

@@ -94,6 +94,9 @@ public class RuneAIPlugin extends Plugin
 	private RuneAIOverlay overlay;
 
 	@Inject
+	private GeFlipOverlay geFlipOverlay;
+
+	@Inject
 	private VoicePlayer voice;
 
 	@Inject
@@ -201,6 +204,7 @@ public class RuneAIPlugin extends Plugin
 		clientToolbar.addNavigation(navButton);
 		overlayManager.add(overlay);
 		overlayManager.add(mascot);
+		overlayManager.add(geFlipOverlay);
 		log.info("RuneAI plugin started (data dir {})", DATA_DIR.getAbsolutePath());
 	}
 
@@ -210,6 +214,7 @@ public class RuneAIPlugin extends Plugin
 		clientToolbar.removeNavigation(navButton);
 		overlayManager.remove(overlay);
 		overlayManager.remove(mascot);
+		overlayManager.remove(geFlipOverlay);
 		if (eventLog != null)
 		{
 			eventLog.close();
@@ -459,8 +464,9 @@ public class RuneAIPlugin extends Plugin
 		}
 
 		// attack + low HP awareness
+		// combat-capable NPCs only — a GE clerk turning to face you is not an attack
 		final boolean underAttack = client.getNpcs().stream()
-			.anyMatch(n -> n != null && n.getInteracting() == lp);
+			.anyMatch(n -> n != null && n.getCombatLevel() > 0 && n.getInteracting() == lp);
 		if (underAttack && !wasUnderAttack && lp.getInteracting() == null)
 		{
 			voice.play("attacked");
