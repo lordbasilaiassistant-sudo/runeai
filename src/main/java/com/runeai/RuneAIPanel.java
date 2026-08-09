@@ -35,6 +35,8 @@ public class RuneAIPanel extends PluginPanel
 	private final JLabel activityValue = new JLabel("—");
 	private final JLabel pnlValue = new JLabel("0 gp");
 	private final JLabel bondValue = new JLabel("—");
+	private final JLabel flipPnlValue = new JLabel("0 gp");
+	private final JPanel flipsBox = new JPanel();
 
 	public RuneAIPanel()
 	{
@@ -72,12 +74,34 @@ public class RuneAIPanel extends PluginPanel
 		card.add(row("Player", playerValue));
 		card.add(row("Activity", activityValue));
 		card.add(row("Session P&L", pnlValue));
+		card.add(row("Flip P&L", flipPnlValue));
 		card.add(row("Bond fund", bondValue));
 		card.add(row("NPCs loaded", npcValue));
 		card.add(row("Players loaded", playersValue));
 		card.add(row("Events logged", eventsValue));
 
 		container.add(card);
+		container.add(Box.createVerticalStrut(12));
+
+		// live GE flip suggestions (tax-aware, from wiki prices API)
+		final JLabel flipTitle = new JLabel("Top GE flips (live)");
+		flipTitle.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 13));
+		flipTitle.setForeground(ACCENT);
+		flipTitle.setAlignmentX(LEFT_ALIGNMENT);
+		container.add(flipTitle);
+		container.add(Box.createVerticalStrut(4));
+
+		flipsBox.setLayout(new BoxLayout(flipsBox, BoxLayout.Y_AXIS));
+		flipsBox.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		flipsBox.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(0, 3, 0, 0, new Color(255, 200, 0)),
+			BorderFactory.createEmptyBorder(8, 8, 8, 8)));
+		flipsBox.setAlignmentX(LEFT_ALIGNMENT);
+		final JLabel loading = new JLabel("fetching prices…");
+		loading.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		loading.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
+		flipsBox.add(loading);
+		container.add(flipsBox);
 		container.add(Box.createVerticalStrut(12));
 
 		final JLabel footer = new JLabel("<html>Recording everything →<br>.runelite\\runeai\\</html>");
@@ -155,6 +179,45 @@ public class RuneAIPanel extends PluginPanel
 		{
 			pnlValue.setText(String.format("%,d gp", pnl));
 			pnlValue.setForeground(pnl > 0 ? OK_GREEN : pnl < 0 ? new Color(255, 90, 90) : Color.WHITE);
+		});
+	}
+
+	public void setFlipPnl(long pnl)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			flipPnlValue.setText(String.format("%,d gp", pnl));
+			flipPnlValue.setForeground(pnl > 0 ? OK_GREEN : pnl < 0 ? new Color(255, 90, 90) : Color.WHITE);
+		});
+	}
+
+	public void setFlips(java.util.List<FlipService.Flip> flips)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			if (flips == null || flips.isEmpty())
+			{
+				return;
+			}
+			flipsBox.removeAll();
+			for (FlipService.Flip f : flips.subList(0, Math.min(5, flips.size())))
+			{
+				final JLabel name = new JLabel(f.getName());
+				name.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 11));
+				name.setForeground(Color.WHITE);
+				name.setAlignmentX(LEFT_ALIGNMENT);
+				final JLabel line = new JLabel(String.format(
+					"buy %,d → sell %,d   +%,d (%.1f%%)",
+					f.getBuyAt(), f.getSellAt(), f.getNet(), f.getRoi()));
+				line.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+				line.setForeground(new Color(255, 200, 0));
+				line.setAlignmentX(LEFT_ALIGNMENT);
+				flipsBox.add(name);
+				flipsBox.add(line);
+				flipsBox.add(Box.createVerticalStrut(5));
+			}
+			flipsBox.revalidate();
+			flipsBox.repaint();
 		});
 	}
 

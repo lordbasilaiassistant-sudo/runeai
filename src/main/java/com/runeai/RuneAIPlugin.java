@@ -102,6 +102,13 @@ public class RuneAIPlugin extends Plugin
 	@Inject
 	private net.runelite.client.game.ItemManager itemManager;
 
+	@Inject
+	private FlipService flipService;
+
+	// realized GE flip tracking (fills are post-tax in the coins we receive)
+	private final Map<Integer, long[]> flipBasis = new java.util.HashMap<>(); // id -> {qty, totalCost}
+	private long flipRealized;
+
 
 	private Gson prettyGson;
 	private RuneAIPanel panel;
@@ -293,12 +300,56 @@ public class RuneAIPlugin extends Plugin
 	}
 
 	@Subscribe
+	public void onGrandExchangeOfferChanged(net.runelite.api.events.GrandExchangeOfferChanged event)
+	{
+		final net.runelite.api.GrandExchangeOffer o = event.getOffer();
+		if (o == null || o.getItemId() <= 0)
+		{
+			return;
+		}
+		final Map<String, Object> d = m();
+		d.put("slot", event.getSlot());
+		d.put("item", o.getItemId());
+		d.put("state", o.getState().name());
+		d.put("price", o.getPrice());
+		d.put("qtySold", o.getQuantitySold());
+		d.put("spent", o.getSpent());
+		emit("geOffer", d);
+
+		// realized flip P&L: completed buys build cost basis, completed sells realize
+		if (o.getState() == net.runelite.api.GrandExchangeOfferState.BOUGHT && o.getQuantitySold() > 0)
+		{
+			flipBasis.merge(o.getItemId(), new long[]{o.getQuantitySold(), o.getSpent()},
+				(a, b) -> new long[]{a[0] + b[0], a[1] + b[1]});
+		}
+		else if (o.getState() == net.runelite.api.GrandExchangeOfferState.SOLD && o.getQuantitySold() > 0)
+		{
+			final long[] basis = flipBasis.get(o.getItemId());
+			if (basis != null && basis[0] > 0)
+			{
+				final long qty = Math.min(o.getQuantitySold(), basis[0]);
+				final long avgCost = basis[1] / basis[0];
+				flipRealized += o.getSpent() - avgCost * qty; // spent on a sell = coins received (post-tax)
+				basis[0] -= qty;
+				basis[1] -= avgCost * qty;
+				panel.setFlipPnl(flipRealized);
+			}
+		}
+	}
+
+	@Subscribe
 	public void onGameTick(GameTick event)
 	{
 		final Player lp = client.getLocalPlayer();
 		if (lp == null)
 		{
 			return;
+		}
+
+		flipService.maybeRefresh();
+		if (client.getTickCount() % 25 == 0)
+		{
+			panel.setFlips(flipService.getTopFlips());
 		}
 
 		panel.setCounts(client.getNpcs().size(), client.getPlayers().size(),
