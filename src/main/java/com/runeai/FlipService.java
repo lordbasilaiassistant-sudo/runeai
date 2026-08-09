@@ -47,6 +47,7 @@ class FlipService
 	@Value
 	static class Flip
 	{
+		int itemId;
 		String name;
 		int buyAt;
 		int sellAt;
@@ -94,7 +95,27 @@ class FlipService
 			out.sort(Comparator.comparingDouble(f ->
 				-(double) f.getNet() * Math.min(f.getUnitsHr(), (double) b / f.getBuyAt())));
 		}
-		return out.subList(0, Math.min(8, out.size()));
+		final List<Flip> top = out.subList(0, Math.min(8, out.size()));
+		final long now = System.currentTimeMillis();
+		for (Flip f : top)
+		{
+			suggested.put(f.getItemId(), new long[]{f.getBuyAt(), f.getSellAt(), now});
+		}
+		return top;
+	}
+
+	// suggestion attribution: did the user trade what we showed, near our price?
+	private final Map<Integer, long[]> suggested = new ConcurrentHashMap<>(); // id -> {buy, sell, whenMs}
+
+	boolean wasSuggested(int itemId, int price, boolean buying)
+	{
+		final long[] s = suggested.get(itemId);
+		if (s == null || System.currentTimeMillis() - s[2] > 45 * 60_000)
+		{
+			return false;
+		}
+		final long ref = buying ? s[0] : s[1];
+		return ref > 0 && Math.abs(price - ref) <= ref * 0.03;
 	}
 
 	static int geTax(int sellPrice)
@@ -178,7 +199,7 @@ class FlipService
 					continue;
 				}
 				final double unitsHr = Math.min(limits.get(id)[0] / 4.0, vol * 12 * 0.10);
-				flips.add(new Flip(name, buyAt, sellAt, net,
+				flips.add(new Flip(id, name, buyAt, sellAt, net,
 					net * 100.0 / buyAt, (long) (net * unitsHr), unitsHr,
 					membersItem.getOrDefault(id, true)));
 			}

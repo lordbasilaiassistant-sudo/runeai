@@ -27,6 +27,20 @@ public class GeFlipOverlay extends Overlay
 	private final RuneAIConfig config;
 	private final FlipService flips;
 
+	private volatile int activeSlots, totalSlots = 3;
+	private volatile long medBuySecs = -1, medSellSecs = -1;
+	private volatile int sugFills, sugCancels;
+
+	void setStats(int active, int total, long medBuy, long medSell, int fills, int cancels)
+	{
+		activeSlots = active;
+		totalSlots = total;
+		medBuySecs = medBuy;
+		medSellSecs = medSell;
+		sugFills = fills;
+		sugCancels = cancels;
+	}
+
 	@Inject
 	GeFlipOverlay(Client client, RuneAIConfig config, FlipService flips)
 	{
@@ -54,7 +68,7 @@ public class GeFlipOverlay extends Overlay
 
 		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 		final int rows = top.isEmpty() ? 1 : Math.min(5, top.size());
-		final int h = 34 + rows * 27 + 6;
+		final int h = 50 + rows * 27 + 6;
 
 		g.setColor(new Color(12, 12, 18, 235));
 		g.fillRoundRect(0, 0, W, h, 10, 10);
@@ -66,7 +80,22 @@ public class GeFlipOverlay extends Overlay
 		g.setColor(GOLD);
 		g.drawString("RuneAI · flips for YOUR budget", 10, 20);
 
-		int y = 40;
+		// pph telemetry: slot use + median fill times + suggestion record
+		g.setFont(g.getFont().deriveFont(Font.PLAIN, 10f));
+		final boolean idle = activeSlots < totalSlots;
+		g.setColor(idle ? new Color(255, 120, 100) : new Color(120, 220, 140));
+		String stat = String.format("slots %d/%d%s", activeSlots, totalSlots,
+			idle ? " — idle slots = lost gp/hr" : " ✓");
+		g.drawString(stat, 10, 33);
+		if (medBuySecs >= 0 || medSellSecs >= 0 || sugFills + sugCancels > 0)
+		{
+			g.setColor(Color.LIGHT_GRAY);
+			g.drawString(String.format("fills: buy ~%ss · sell ~%ss · calls %d✓/%d✗",
+				medBuySecs < 0 ? "?" : medBuySecs, medSellSecs < 0 ? "?" : medSellSecs,
+				sugFills, sugCancels), 10, 44);
+		}
+
+		int y = 58;
 		if (top.isEmpty())
 		{
 			g.setFont(g.getFont().deriveFont(Font.PLAIN, 11f));

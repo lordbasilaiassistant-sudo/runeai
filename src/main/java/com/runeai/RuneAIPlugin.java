@@ -112,6 +112,19 @@ public class RuneAIPlugin extends Plugin
 	private final Map<Integer, long[]> flipBasis = new java.util.HashMap<>(); // id -> {qty, totalCost}
 	private long flipRealized;
 
+	// per-slot offer lifecycle: fill TIME is the pph lever
+	private static final class OfferTrack
+	{
+		int itemId;
+		int price;
+		boolean buying;
+		long startMs;
+	}
+	private final OfferTrack[] offerTracks = new OfferTrack[8];
+	private final List<Long> buyFillSecs = new ArrayList<>();
+	private final List<Long> sellFillSecs = new ArrayList<>();
+	private int sugFills, sugCancels;
+
 
 	private Gson prettyGson;
 	private RuneAIPanel panel;
@@ -312,13 +325,67 @@ public class RuneAIPlugin extends Plugin
 		{
 			return;
 		}
+		final int slot = event.getSlot();
+		final net.runelite.api.GrandExchangeOfferState st = o.getState();
+		final boolean buying = st == net.runelite.api.GrandExchangeOfferState.BUYING
+			|| st == net.runelite.api.GrandExchangeOfferState.BOUGHT
+			|| st == net.runelite.api.GrandExchangeOfferState.CANCELLED_BUY;
+		final long nowMs = System.currentTimeMillis();
+
+		// lifecycle: new offer starts the clock, completion/cancel reads it
+		OfferTrack tr = offerTracks[slot];
+		if (st == net.runelite.api.GrandExchangeOfferState.BUYING
+			|| st == net.runelite.api.GrandExchangeOfferState.SELLING)
+		{
+			if (tr == null || tr.itemId != o.getItemId() || tr.price != o.getPrice())
+			{
+				tr = new OfferTrack();
+				tr.itemId = o.getItemId();
+				tr.price = o.getPrice();
+				tr.buying = buying;
+				tr.startMs = nowMs;
+				offerTracks[slot] = tr;
+			}
+		}
+
+		Long fillSecs = null;
+		final boolean sug = flipService.wasSuggested(o.getItemId(), o.getPrice(), buying);
+		if (st == net.runelite.api.GrandExchangeOfferState.BOUGHT
+			|| st == net.runelite.api.GrandExchangeOfferState.SOLD)
+		{
+			if (tr != null && tr.itemId == o.getItemId())
+			{
+				fillSecs = (nowMs - tr.startMs) / 1000;
+				(buying ? buyFillSecs : sellFillSecs).add(fillSecs);
+			}
+			if (sug)
+			{
+				sugFills++;
+			}
+			offerTracks[slot] = null;
+		}
+		else if (st == net.runelite.api.GrandExchangeOfferState.CANCELLED_BUY
+			|| st == net.runelite.api.GrandExchangeOfferState.CANCELLED_SELL)
+		{
+			if (sug)
+			{
+				sugCancels++; // our call stalled long enough that they pulled it
+			}
+			offerTracks[slot] = null;
+		}
+
 		final Map<String, Object> d = m();
-		d.put("slot", event.getSlot());
+		d.put("slot", slot);
 		d.put("item", o.getItemId());
-		d.put("state", o.getState().name());
+		d.put("state", st.name());
 		d.put("price", o.getPrice());
 		d.put("qtySold", o.getQuantitySold());
 		d.put("spent", o.getSpent());
+		d.put("suggested", sug);
+		if (fillSecs != null)
+		{
+			d.put("fillSecs", fillSecs);
+		}
 		emit("geOffer", d);
 
 		// realized flip P&L: completed buys build cost basis, completed sells realize
@@ -367,9 +434,24 @@ public class RuneAIPlugin extends Plugin
 					}
 				}
 			}
-			flipService.setContext(coins,
-				!client.getWorldType().contains(net.runelite.api.WorldType.MEMBERS));
+			final boolean membersW = client.getWorldType().contains(net.runelite.api.WorldType.MEMBERS);
+			flipService.setContext(coins, !membersW);
 			panel.setFlips(flipService.getTopFlips());
+
+			// slot utilization: an idle slot is wasted throughput
+			int active = 0;
+			final net.runelite.api.GrandExchangeOffer[] offers = client.getGrandExchangeOffers();
+			final int slots = membersW ? 8 : 3;
+			for (int i = 0; i < Math.min(slots, offers.length); i++)
+			{
+				final net.runelite.api.GrandExchangeOfferState os = offers[i].getState();
+				if (os != net.runelite.api.GrandExchangeOfferState.EMPTY)
+				{
+					active++;
+				}
+			}
+			geFlipOverlay.setStats(active, slots, median(buyFillSecs), median(sellFillSecs),
+				sugFills, sugCancels);
 		}
 
 		panel.setCounts(client.getNpcs().size(), client.getPlayers().size(),
@@ -413,6 +495,17 @@ public class RuneAIPlugin extends Plugin
 		recordTickVector(lp);
 		updateGuidance(lp);
 		damageTakenThisTick = 0;
+	}
+
+	private static long median(List<Long> v)
+	{
+		if (v.isEmpty())
+		{
+			return -1;
+		}
+		final List<Long> c = new ArrayList<>(v);
+		Collections.sort(c);
+		return c.get(c.size() / 2);
 	}
 
 	// ================= activity guidance =================
