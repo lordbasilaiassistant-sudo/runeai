@@ -82,6 +82,9 @@ public class RuneAIPlugin extends Plugin
 	private RuneAIConfig config;
 
 	@Inject
+	private ConfigManager configManager;
+
+	@Inject
 	private Gson gson;
 
 	@Inject
@@ -121,6 +124,7 @@ public class RuneAIPlugin extends Plugin
 	private int idleTicks;
 	private int lastGuideTick;
 	private int lastPotRemindTick;
+	private int lastKillTick = -1000;
 	private boolean wasUnderAttack;
 
 	// ---- session P&L ledger (inventory+equipment deltas at GE value) ----
@@ -152,6 +156,17 @@ public class RuneAIPlugin extends Plugin
 	{
 		DATA_DIR.mkdirs();
 		prettyGson = gson.newBuilder().setPrettyPrinting().create();
+
+		// one-time migration: the old loot defaults (100 gp / 0.05%) proved too chatty
+		// and were already persisted into the profile — unset so the new defaults apply
+		if (config.minLootValue() == 100)
+		{
+			configManager.unsetConfiguration("runeai", "minLootValue");
+		}
+		if (config.lootWorthPercent() == 0.05)
+		{
+			configManager.unsetConfiguration("runeai", "lootWorthPercent");
+		}
 
 		if (config.logEvents())
 		{
@@ -460,15 +475,28 @@ public class RuneAIPlugin extends Plugin
 		lastPos = pos;
 		idleTicks = idle ? idleTicks + 1 : 0;
 
-		if (idleTicks >= 4 && tick - lastGuideTick >= 6)
+		// combat has natural gaps (death anims, looting, burying) — be patient there,
+		// and never nag right after a kill
+		final boolean combat = "Combat".equals(activity);
+		final int needIdle = combat ? 17 : 8;
+		if (combat && tick - lastKillTick < 25)
+		{
+			return;
+		}
+
+		if (idleTicks >= needIdle && tick - lastGuideTick >= 10)
 		{
 			lastGuideTick = tick;
 			final Object[] target = findNearestClickable(activity, pos);
 			if (target != null)
 			{
 				overlay.flashTile((WorldPoint) target[0], RuneAIOverlay.GUIDE,
-					"Click: " + target[1], tick + 6);
-				voice.play("idle");
+					"Click: " + target[1], tick + 8);
+				if (!combat)
+				{
+					// the voice nag is for AFK skilling; in combat the flash is enough
+					voice.play("idle");
+				}
 			}
 		}
 	}
@@ -757,6 +785,14 @@ public class RuneAIPlugin extends Plugin
 	@Subscribe
 	public void onActorDeath(ActorDeath event)
 	{
+		// our kill dying starts the loot/bury window — no idle nagging during it
+		final Player lp = client.getLocalPlayer();
+		final Actor a = event.getActor();
+		if (lp != null && a instanceof NPC
+			&& (a.getInteracting() == lp || lp.getInteracting() == a))
+		{
+			lastKillTick = client.getTickCount();
+		}
 		emit("death", Map.of("actor", actorInfo(event.getActor())));
 	}
 

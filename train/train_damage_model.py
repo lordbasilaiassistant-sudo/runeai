@@ -57,8 +57,13 @@ def featurize(row):
 def load():
     rows = []
     for path in sorted(glob.glob(TICK_GLOB)):
+        session = []
         with open(path, encoding="utf-8") as f:
-            session = [json.loads(line) for line in f if line.strip()]
+            for line in f:
+                try:
+                    session.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass  # live session mid-write / truncated tail
         # label each tick from the session's own future
         for i, row in enumerate(session):
             fut = session[i + 1 : i + 1 + HORIZON]

@@ -74,7 +74,7 @@ public interface RuneAIConfig extends Config
 	)
 	default int minLootValue()
 	{
-		return 100;
+		return 500;
 	}
 
 	@ConfigItem(
@@ -84,7 +84,7 @@ public interface RuneAIConfig extends Config
 	)
 	default double lootWorthPercent()
 	{
-		return 0.05;
+		return 0.2;
 	}
 
 	@ConfigItem(
