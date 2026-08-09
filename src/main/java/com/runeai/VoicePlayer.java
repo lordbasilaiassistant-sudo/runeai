@@ -32,7 +32,8 @@ class VoicePlayer
 		"loot", "Good drop. Grab it.",
 		"attacked", "You're under attack.",
 		"pot", "Pot up. Drink your potion.",
-		"bond", "You can afford a bond. Time to go members.");
+		"bond", "You can afford a bond. Time to go members.",
+		"levelup", "Nice one. Level up!");
 
 	private final RuneAIConfig config;
 	private final Map<String, Long> lastPlayed = new ConcurrentHashMap<>();

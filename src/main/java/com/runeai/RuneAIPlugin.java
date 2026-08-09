@@ -117,6 +117,7 @@ public class RuneAIPlugin extends Plugin
 	private static final Set<Skill> COMBAT_SKILLS = Set.of(
 		Skill.ATTACK, Skill.STRENGTH, Skill.DEFENCE, Skill.RANGED, Skill.MAGIC, Skill.HITPOINTS);
 	private final Map<Skill, Integer> lastXp = new java.util.EnumMap<>(Skill.class);
+	private final Map<Skill, Integer> lastLevel = new java.util.EnumMap<>(Skill.class);
 	private Skill lastXpSkill;
 	private int lastXpTick = -1000;
 	private int lastTargetNpcId = -1;
@@ -757,6 +758,15 @@ public class RuneAIPlugin extends Plugin
 			lastXpSkill = event.getSkill();
 			lastXpTick = client.getTickCount();
 			xpGainedSession += event.getXp() - prev;
+		}
+
+		// LEVEL UP — prev level known this session (filters the login stat sync)
+		final Integer prevLevel = lastLevel.put(event.getSkill(), event.getLevel());
+		if (prevLevel != null && event.getLevel() > prevLevel)
+		{
+			overlay.setAlert(event.getSkill().getName() + " level " + event.getLevel() + "!",
+				client.getTickCount() + 8);
+			voice.play("levelup");
 		}
 
 		final Map<String, Object> d = m();
