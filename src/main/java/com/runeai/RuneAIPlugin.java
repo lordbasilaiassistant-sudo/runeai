@@ -1063,10 +1063,10 @@ public class RuneAIPlugin extends Plugin
 
 				if (PRAYER_BONES.contains(name.toLowerCase()))
 				{
-					// prayer xp beats GE price — always worth burying
+					// prayer xp beats GE price — always worth burying, but bones every
+					// kill are routine: silent flash only, the voice is for real loot
 					overlay.flashTile(wp, RuneAIOverlay.LOOT, name + " · bury",
 						client.getTickCount() + 12);
-					voice.play("loot");
 				}
 				else if (value >= threshold)
 				{
