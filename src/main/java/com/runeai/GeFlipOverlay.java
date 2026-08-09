@@ -64,7 +64,7 @@ public class GeFlipOverlay extends Overlay
 
 		g.setFont(g.getFont().deriveFont(Font.BOLD, 13f));
 		g.setColor(GOLD);
-		g.drawString("RuneAI · top flips (after tax)", 10, 20);
+		g.drawString("RuneAI · flips for YOUR budget", 10, 20);
 
 		int y = 40;
 		if (top.isEmpty())

@@ -38,8 +38,11 @@ class FlipService
 
 	private final Map<Integer, int[]> limits = new ConcurrentHashMap<>();   // id -> {limit}
 	private final Map<Integer, String> names = new ConcurrentHashMap<>();
-	private volatile List<Flip> topFlips = List.of();
+	private final Map<Integer, Boolean> membersItem = new ConcurrentHashMap<>();
+	private volatile List<Flip> allFlips = List.of();
 	private final AtomicLong lastRefresh = new AtomicLong();
+	private volatile long budget = -1;       // carried coins; -1 = unknown
+	private volatile boolean f2pOnly;
 
 	@Value
 	static class Flip
@@ -50,6 +53,8 @@ class FlipService
 		int net;
 		double roi;
 		long gpHr;
+		double unitsHr;
+		boolean members;
 	}
 
 	@Inject
@@ -59,9 +64,37 @@ class FlipService
 		this.gson = gson;
 	}
 
+	/** Player context from the plugin: carried coins + world type. */
+	void setContext(long coins, boolean f2p)
+	{
+		budget = coins;
+		f2pOnly = f2p;
+	}
+
+	/** Flips the PLAYER can actually do: world-type filtered, budget filtered,
+	 *  ranked by achievable gp/hr with their capital. */
 	List<Flip> getTopFlips()
 	{
-		return topFlips;
+		final long b = budget;
+		final List<Flip> out = new ArrayList<>();
+		for (Flip f : allFlips)
+		{
+			if (f2pOnly && f.isMembers())
+			{
+				continue;
+			}
+			if (b >= 0 && f.getBuyAt() > b)
+			{
+				continue;
+			}
+			out.add(f);
+		}
+		if (b > 0)
+		{
+			out.sort(Comparator.comparingDouble(f ->
+				-(double) f.getNet() * Math.min(f.getUnitsHr(), (double) b / f.getBuyAt())));
+		}
+		return out.subList(0, Math.min(8, out.size()));
 	}
 
 	static int geTax(int sellPrice)
@@ -90,6 +123,7 @@ class FlipService
 					final JsonObject o = e.getAsJsonObject();
 					final int id = o.get("id").getAsInt();
 					names.put(id, o.get("name").getAsString());
+					membersItem.put(id, o.has("members") && o.get("members").getAsBoolean());
 					limits.put(id, new int[]{o.has("limit") && !o.get("limit").isJsonNull()
 						? o.get("limit").getAsInt() : 100});
 				}
@@ -145,11 +179,12 @@ class FlipService
 				}
 				final double unitsHr = Math.min(limits.get(id)[0] / 4.0, vol * 12 * 0.10);
 				flips.add(new Flip(name, buyAt, sellAt, net,
-					net * 100.0 / buyAt, (long) (net * unitsHr)));
+					net * 100.0 / buyAt, (long) (net * unitsHr), unitsHr,
+					membersItem.getOrDefault(id, true)));
 			}
 			flips.sort(Comparator.comparingLong(f -> -f.gpHr));
-			topFlips = flips.subList(0, Math.min(8, flips.size()));
-			log.info("flip scan: {} candidates, top {}", flips.size(), topFlips.size());
+			allFlips = flips;
+			log.info("flip scan: {} candidates", flips.size());
 		}));
 	}
 

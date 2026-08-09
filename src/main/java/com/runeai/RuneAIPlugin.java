@@ -352,8 +352,23 @@ public class RuneAIPlugin extends Plugin
 		}
 
 		flipService.maybeRefresh();
-		if (client.getTickCount() % 25 == 0)
+		if (client.getTickCount() % 10 == 0)
 		{
+			long coins = 0;
+			final net.runelite.api.ItemContainer inv =
+				client.getItemContainer(net.runelite.api.InventoryID.INVENTORY);
+			if (inv != null)
+			{
+				for (net.runelite.api.Item it : inv.getItems())
+				{
+					if (it != null && it.getId() == net.runelite.api.ItemID.COINS_995)
+					{
+						coins += it.getQuantity();
+					}
+				}
+			}
+			flipService.setContext(coins,
+				!client.getWorldType().contains(net.runelite.api.WorldType.MEMBERS));
 			panel.setFlips(flipService.getTopFlips());
 		}
 
