@@ -78,6 +78,16 @@ public interface RuneAIConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "potReminder",
+		name = "Potion reminder",
+		description = "Remind you to drink a boost potion when fighting unpotted with one in your inventory"
+	)
+	default boolean potReminder()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "lowHpWarn",
 		name = "Low HP alert",
 		description = "Show an EAT warning when under attack with low hitpoints"

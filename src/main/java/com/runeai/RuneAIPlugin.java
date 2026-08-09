@@ -116,6 +116,7 @@ public class RuneAIPlugin extends Plugin
 	private WorldPoint lastPos;
 	private int idleTicks;
 	private int lastGuideTick;
+	private int lastPotRemindTick;
 	private boolean wasUnderAttack;
 
 	@Override
@@ -341,6 +342,12 @@ public class RuneAIPlugin extends Plugin
 		final String activity = currentActivity();
 		panel.setActivity(activity == null ? "—" : activity);
 
+		// fighting unpotted with a boost potion in the bag -> pot up
+		if (config.potReminder() && "Combat".equals(activity) && tick - lastPotRemindTick >= 100)
+		{
+			checkPotions(tick);
+		}
+
 		if (!config.guideIdle() || activity == null)
 		{
 			idleTicks = 0;
@@ -365,6 +372,61 @@ public class RuneAIPlugin extends Plugin
 				overlay.flashTile((WorldPoint) target[0], RuneAIOverlay.GUIDE,
 					"Click: " + target[1], tick + 6);
 				voice.play("idle");
+			}
+		}
+	}
+
+	private void checkPotions(int tick)
+	{
+		final net.runelite.api.ItemContainer inv =
+			client.getItemContainer(net.runelite.api.InventoryID.INVENTORY);
+		if (inv == null)
+		{
+			return;
+		}
+		for (net.runelite.api.Item item : inv.getItems())
+		{
+			if (item == null || item.getId() <= 0)
+			{
+				continue;
+			}
+			final String name = client.getItemDefinition(item.getId()).getName();
+			final String lower = name.toLowerCase();
+			if (!lower.contains("potion"))
+			{
+				continue;
+			}
+			final Skill boosts;
+			if (lower.contains("strength"))
+			{
+				boosts = Skill.STRENGTH;
+			}
+			else if (lower.contains("attack") || lower.contains("combat"))
+			{
+				boosts = Skill.ATTACK;
+			}
+			else if (lower.contains("defence"))
+			{
+				boosts = Skill.DEFENCE;
+			}
+			else if (lower.contains("ranging"))
+			{
+				boosts = Skill.RANGED;
+			}
+			else if (lower.contains("magic"))
+			{
+				boosts = Skill.MAGIC;
+			}
+			else
+			{
+				continue;
+			}
+			if (client.getBoostedSkillLevel(boosts) <= client.getRealSkillLevel(boosts))
+			{
+				lastPotRemindTick = tick;
+				overlay.setAlert("Pot up — " + name, tick + 5);
+				voice.play("pot");
+				return;
 			}
 		}
 	}

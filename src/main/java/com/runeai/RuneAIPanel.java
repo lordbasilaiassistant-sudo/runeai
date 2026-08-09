@@ -9,14 +9,18 @@ import java.awt.Graphics2D;
 import java.awt.GridLayout;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
+import java.awt.Cursor;
+import java.awt.Dimension;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.PluginPanel;
+import net.runelite.client.util.LinkBrowser;
 
 public class RuneAIPanel extends PluginPanel
 {
@@ -77,6 +81,35 @@ public class RuneAIPanel extends PluginPanel
 		footer.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		footer.setAlignmentX(LEFT_ALIGNMENT);
 		container.add(footer);
+		container.add(Box.createVerticalStrut(14));
+
+		final JButton kofi = new JButton("♥  Support us on Ko-fi");
+		kofi.setBackground(new Color(255, 94, 91));
+		kofi.setForeground(Color.WHITE);
+		kofi.setFocusPainted(false);
+		kofi.setBorderPainted(false);
+		kofi.setOpaque(true);
+		kofi.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 12));
+		kofi.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		kofi.setAlignmentX(LEFT_ALIGNMENT);
+		kofi.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
+		kofi.setToolTipText("One-time or monthly — you pick. Keeps RuneAI free.");
+		kofi.addActionListener(e -> LinkBrowser.browse("https://ko-fi.com/broketobuilt"));
+		kofi.addMouseListener(new java.awt.event.MouseAdapter()
+		{
+			@Override
+			public void mouseEntered(java.awt.event.MouseEvent e)
+			{
+				kofi.setBackground(new Color(255, 122, 119));
+			}
+
+			@Override
+			public void mouseExited(java.awt.event.MouseEvent e)
+			{
+				kofi.setBackground(new Color(255, 94, 91));
+			}
+		});
+		container.add(kofi);
 
 		add(container, BorderLayout.NORTH);
 	}
