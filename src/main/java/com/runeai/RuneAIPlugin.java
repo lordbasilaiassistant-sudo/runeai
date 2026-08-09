@@ -979,15 +979,18 @@ public class RuneAIPlugin extends Plugin
 			bankValue = v;
 		}
 
-		// full inventory only means "bank" for a BANKING gatherer:
-		// combat keeps going (food/pots free slots), power-trainers drop instead
+		// full inventory only means "bank" for a BANKING gatherer with no supplies:
+		// food/pots in the bag = the trip continues (they free slots as you use them),
+		// power-trainers drop instead, and combat is never nudged
 		if (event.getContainerId() == net.runelite.api.InventoryID.INVENTORY.getId()
 			&& event.getItemContainer().count() >= 28)
 		{
 			final String act = currentActivity();
 			if (act != null && !"Combat".equals(act)
 				&& !"xp".equals(goalMode())
-				&& client.getTickCount() - lastDropTick > 150)
+				&& client.getTickCount() - lastDropTick > 150
+				&& countInventoryAction("Eat") == 0
+				&& countInventoryAction("Drink") == 0)
 			{
 				overlay.setAlert("Inventory full — bank it", client.getTickCount() + 8);
 				voice.play("bank");
