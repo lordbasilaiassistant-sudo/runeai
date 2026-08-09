@@ -13,6 +13,11 @@ from engine import PlayerState, combat_rates, boss_fight_mc, boss_fight_cached
 from unlocks import UNLOCKS, TRIAL_BOSSES, available, blocking_skill
 
 BLOCK_H = 6.0
+# GE flipping: gp/hr scales with deployable capital until liquidity caps it.
+# ROI/hr + cap calibrated from live flip_scan medians (see sim/market.py --flips).
+FLIP_ROI_HR = 0.015
+FLIP_CAP_HR = 350_000
+FLIP_CAP_HR_F2P = 120_000
 QUEST_SKILL_XP_HR = 30000   # generic "train an odd skill for a quest gate"
 QUEST_SKILL_GP_HR = -5000
 
@@ -212,6 +217,10 @@ def run(start: dict, days: int = 60, verbose=True, ironman: bool = False):
             else:
                 act, gp_hr, xp_hr, gain = (f"quest-skill {gate[0]} for {gate[2]}",
                                            QUEST_SKILL_GP_HR, QUEST_SKILL_XP_HR, gate[0])
+        elif (flip_hr := min(p.gp * FLIP_ROI_HR,
+                             FLIP_CAP_HR if p.members else FLIP_CAP_HR_F2P)) > max(
+                cam_gp["gp_hr"] if cam_gp else 0, sk["gp_hr"] if sk else 0):
+            act, gp_hr, xp_hr, gain = "GE flipping", flip_hr, 0, None
         elif cam_gp and (not sk or cam_gp["gp_hr"] >= sk["gp_hr"]):
             act, gp_hr, xp_hr = f"camp {cam_gp['name']}", cam_gp["gp_hr"], cam_gp["xp_hr"]
             gain = min(("Attack", "Strength", "Defence"), key=lambda s: skills[s])

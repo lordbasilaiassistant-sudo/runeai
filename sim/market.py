@@ -6,7 +6,8 @@ RSI(14) on the 1h series flags oversold (<30, buy candidate) and
 overbought (>70, sell candidate) items — merching as another income
 activity, and later live flip advice in the plugin.
 
-  py sim/market.py            # watchlist report
+  py sim/market.py            # watchlist RSI report
+  py sim/market.py --flips    # whole-market flip scanner (tax-aware)
 """
 import json
 import sys
@@ -68,7 +69,65 @@ def analyze(item_id, name):
     return f"  {name:20s} {last:>12,} gp  RSI(14) {r:5.1f}  7d {wk:+6.2f}%   {sig}"
 
 
+# ---- GE tax (VERIFY exemption details vs wiki: 2% seller-side, 5M cap/item,
+# sub-50gp sales and bonds exempt) ----
+GE_TAX_RATE = 0.02
+GE_TAX_CAP = 5_000_000
+TAX_EXEMPT = {13190}
+
+
+def ge_tax(sell_price: int, item_id: int = -1) -> int:
+    if sell_price < 50 or item_id in TAX_EXEMPT:
+        return 0
+    return min(int(sell_price * GE_TAX_RATE), GE_TAX_CAP)
+
+
+def flip_scan(top=20, min_price=100, min_vol_5m=10):
+    """Whole-market flip finder: buy at insta-sell+1, sell at insta-buy-1,
+    net of GE tax, throughput bounded by buy limit and real 5m volume."""
+    mapping = {m["id"]: m for m in fetch(f"{API}/mapping")}
+    latest = fetch(f"{API}/latest")["data"]
+    five = fetch(f"{API}/5m")["data"]
+    rows = []
+    for sid, q in latest.items():
+        iid = int(sid)
+        m = mapping.get(iid)
+        v = five.get(sid, {})
+        if not m or not q.get("high") or not q.get("low"):
+            continue
+        vol = (v.get("highPriceVolume", 0) + v.get("lowPriceVolume", 0))
+        if q["low"] < min_price or vol < min_vol_5m:
+            continue
+        buy_at = q["low"] + 1
+        sell_at = q["high"] - 1
+        net = sell_at - ge_tax(sell_at, iid) - buy_at
+        if net <= 0:
+            continue
+        limit = m.get("limit") or 100
+        units_hr = min(limit / 4.0, vol * 12 * 0.10)  # 10% market share, 4h limit window
+        rows.append(dict(name=m["name"], buy=buy_at, sell=sell_at, net=net,
+                         roi=net / buy_at * 100, units_hr=units_hr,
+                         gp_hr=net * units_hr, capital=buy_at * min(limit, 100)))
+    rows.sort(key=lambda r: -r["gp_hr"])
+    return rows[:top]
+
+
+def flip_report():
+    rows = flip_scan()
+    print("=== GE FLIP SCANNER — live, tax-aware (buy low+1 / sell high-1, 2% tax) ===")
+    print(f"  {'item':28s} {'buy at':>10s} {'sell at':>10s} {'net/flip':>9s} {'roi%':>6s} {'est gp/hr':>11s}")
+    for r in rows:
+        print(f"  {r['name'][:28]:28s} {r['buy']:>10,} {r['sell']:>10,} {r['net']:>9,} "
+              f"{r['roi']:>5.1f}% {r['gp_hr']:>11,.0f}")
+    if rows:
+        med = sorted(r['gp_hr'] for r in rows)[len(rows)//2]
+        print(f"\n  median top-20 gp/hr {med:,.0f} — suggestions, not orders; margins move fast.")
+
+
 if __name__ == "__main__":
+    if "--flips" in sys.argv:
+        flip_report()
+        sys.exit(0)
     print("=== GE MARKET — live wiki prices, RSI(14) on 1h series ===")
     for iid, name in WATCHLIST.items():
         print(analyze(iid, name))
