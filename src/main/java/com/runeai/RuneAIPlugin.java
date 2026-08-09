@@ -140,6 +140,12 @@ public class RuneAIPlugin extends Plugin
 	private long bankValue = -1; // unknown until the bank is opened once
 	private boolean bondAnnounced;
 
+	// bones worth burying on sight — prayer xp beats their GE price (big bones and up)
+	private static final Set<String> PRAYER_BONES = Set.of(
+		"big bones", "babydragon bones", "dragon bones", "wyvern bones",
+		"wyrm bones", "drake bones", "hydra bones", "lava dragon bones",
+		"dagannoth bones", "superior dragon bones");
+
 
 	@Override
 	protected void startUp() throws Exception
@@ -1009,12 +1015,29 @@ public class RuneAIPlugin extends Plugin
 				droppedValue += value;
 				lastDropTick = client.getTickCount();
 			}
-			else if (value >= config.minLootValue())
+			else
 			{
 				final String name = client.getItemDefinition(event.getItem().getId()).getName();
-				overlay.flashTile(wp, RuneAIOverlay.LOOT, name + " · " + value + " gp",
-					client.getTickCount() + 12);
-				voice.play("loot");
+
+				// "good drop" is relative to wealth: flat gp floor OR a % of total worth,
+				// whichever is higher — 100gp matters at 100k worth, not at 1B
+				final long worth = totalWorth();
+				final long threshold = Math.max(config.minLootValue(),
+					(long) (worth * config.lootWorthPercent() / 100.0));
+
+				if (PRAYER_BONES.contains(name.toLowerCase()))
+				{
+					// prayer xp beats GE price — always worth burying
+					overlay.flashTile(wp, RuneAIOverlay.LOOT, name + " · bury",
+						client.getTickCount() + 12);
+					voice.play("loot");
+				}
+				else if (value >= threshold)
+				{
+					overlay.flashTile(wp, RuneAIOverlay.LOOT, name + " · " + value + " gp",
+						client.getTickCount() + 12);
+					voice.play("loot");
+				}
 			}
 		}
 
@@ -1022,6 +1045,11 @@ public class RuneAIPlugin extends Plugin
 		d.put("id", event.getItem().getId());
 		d.put("qty", event.getItem().getQuantity());
 		d.put("pos", wp.getX() + "," + wp.getY() + "," + wp.getPlane());
+		// absolute AND wealth-relative value — models learn that "good drop" scales with the bank
+		final long v = (long) itemManager.getItemPrice(event.getItem().getId()) * event.getItem().getQuantity();
+		final long tw = totalWorth();
+		d.put("value", v);
+		d.put("worthRatio", tw > 0 ? (double) v / tw : 0.0);
 		emit("itemSpawn", d);
 	}
 

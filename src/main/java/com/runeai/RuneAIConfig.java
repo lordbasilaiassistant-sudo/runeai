@@ -70,11 +70,21 @@ public interface RuneAIConfig extends Config
 	@ConfigItem(
 		keyName = "minLootValue",
 		name = "Min loot value (gp)",
-		description = "Only flash and call out drops worth at least this much"
+		description = "Flat gp floor — drops below this never call out"
 	)
 	default int minLootValue()
 	{
 		return 100;
+	}
+
+	@ConfigItem(
+		keyName = "lootWorthPercent",
+		name = "Loot threshold (% of worth)",
+		description = "A drop must also be worth this percent of your total worth — 'good drop' scales with your bank (0 = flat floor only)"
+	)
+	default double lootWorthPercent()
+	{
+		return 0.05;
 	}
 
 	@ConfigItem(
