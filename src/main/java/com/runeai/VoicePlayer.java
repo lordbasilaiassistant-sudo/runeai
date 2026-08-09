@@ -38,6 +38,17 @@ class VoicePlayer
 	private final RuneAIConfig config;
 	private final Map<String, Long> lastPlayed = new ConcurrentHashMap<>();
 
+	// one mouth: a single-thread queue so lines can NEVER overlap
+	private final java.util.concurrent.ExecutorService speechQueue =
+		java.util.concurrent.Executors.newSingleThreadExecutor(r ->
+		{
+			final Thread t = new Thread(r, "runeai-voice");
+			t.setDaemon(true);
+			return t;
+		});
+	private final java.util.concurrent.atomic.AtomicInteger queued =
+		new java.util.concurrent.atomic.AtomicInteger();
+
 	private volatile float mouth;
 	private volatile String speakingText;
 
@@ -71,11 +82,24 @@ class VoicePlayer
 		{
 			return;
 		}
+		// coaching, not a backlog: if a line is playing and one is waiting, drop this one
+		if (queued.get() >= 2)
+		{
+			return;
+		}
 		lastPlayed.put(key, now);
-
-		final Thread t = new Thread(() -> speak(key), "runeai-voice");
-		t.setDaemon(true);
-		t.start();
+		queued.incrementAndGet();
+		speechQueue.submit(() ->
+		{
+			try
+			{
+				speak(key);
+			}
+			finally
+			{
+				queued.decrementAndGet();
+			}
+		});
 	}
 
 	private void speak(String key)
@@ -145,6 +169,7 @@ class VoicePlayer
 				mouth = hop < hops ? env[hop] : 0f;
 				Thread.sleep(33);
 			}
+			Thread.sleep(400); // breath between queued lines
 		}
 		catch (Exception ex)
 		{

@@ -44,7 +44,7 @@ public interface RuneAIConfig extends Config
 	)
 	default boolean screenshotMode()
 	{
-		return true;
+		return false;
 	}
 
 	@ConfigItem(
