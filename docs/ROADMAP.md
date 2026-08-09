@@ -78,13 +78,11 @@ Everything RuneAI learns from is recorded locally first.
 - **F2P bond ladder** — every 50 ticks, total worth (inventory + equipment + last-seen bank) is compared
   against the live GE bond price; the panel shows the percentage and a one-shot alert fires when you can
   afford one.
-- **Auto-screenshot mode** — temporary, on by default: up to 8 PNGs per session into
-  `~/.runelite/runeai/shots/` when a useful moment fires, for README images. Meant to be removed.
 
 ### Voice callouts [done]
 
 - Eight bundled WAV lines (mono 16-bit PCM, 24 kHz) rendered offline with **local Kokoro TTS**: `idle`,
-  `eat`, `bank`, `loot`, `attacked`, `pot`, `shot`, `bond` (`src/main/resources/com/runeai/voice/`).
+  `eat`, `bank`, `loot`, `attacked`, `pot`, `bond` (`src/main/resources/com/runeai/voice/`).
 - Playback is local, offline, and dependency-free — no network calls, no cloud TTS, no API key.
 - Each line has a 12-second per-key cooldown so the companion never nags.
 
@@ -116,7 +114,7 @@ fund, NPCs loaded, players loaded, events logged, the data directory, and the Ko
 
 Config group `runeai`, 15 keys:
 
-`greeting`, `logEvents`, `logVarbits`, `screenshotMode`, `trackPnl`, `showMascot`, `voiceCallouts`,
+`greeting`, `logEvents`, `logVarbits`, `trackPnl`, `showMascot`, `voiceCallouts`,
 `minLootValue`, `showOverlays`, `guideIdle`, `potReminder`, `lowHpWarn`, `lowHpPercent`, `recordTicks`,
 `heartbeatTicks`.
 
@@ -187,13 +185,13 @@ game state snapshots + live event stream", which is also now too narrow). The Ja
 from `build.gradle` (`options.release.set(11)`), not from the properties file.
 
 Before submitting we intend to: finish the danger-model integration, widen activity coverage, remove the
-temporary auto-screenshot feature, give the bank nudge and bond ladder their own config toggles, fix the
+give the bank nudge and bond ladder their own config toggles, fix the
 plugin description strings, review the data layer for anything a reviewer would flag, confirm no
-automation-adjacent behaviour anywhere in the codebase, and add real screenshots.
+automation-adjacent behaviour anywhere in the codebase.
 
 ### Documentation and media [later]
 
-Screenshots coming — none exist in the repo today, and this roadmap will not pretend otherwise.
+A real in-game screenshot lives in the README (docs/img/runeai-in-action.png), captured by a since-removed auto-screenshot helper.
 
 ---
 
@@ -223,7 +221,6 @@ Not yet. It currently runs from source with `./gradlew run`. Plugin Hub submissi
 ### Where does RuneAI store its data?
 
 In `~/.runelite/runeai/` — `ticks-*.jsonl`, `events-*.jsonl`, `snapshot-*.json`, and, while the temporary
-screenshot mode is on, PNGs under `shots/`. The data is local only, outside the repo tree, and never
 uploaded.
 
 ### Does the voice need an internet connection or an API key?

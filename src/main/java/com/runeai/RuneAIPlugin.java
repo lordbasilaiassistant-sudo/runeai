@@ -61,8 +61,8 @@ import net.runelite.client.ui.NavigationButton;
 @Slf4j
 @PluginDescriptor(
 	name = "RuneAI",
-	description = "RuneAI data layer — full game state snapshots + live event stream",
-	tags = {"ai", "runeai", "data"}
+	description = "AI buddy for OSRS — idle click guidance, voice callouts, lip-syncing mascot, smart loot alerts, session P&L",
+	tags = {"ai", "runeai", "assistant", "overlay"}
 )
 public class RuneAIPlugin extends Plugin
 {
@@ -99,11 +99,6 @@ public class RuneAIPlugin extends Plugin
 	@Inject
 	private net.runelite.client.game.ItemManager itemManager;
 
-	@Inject
-	private net.runelite.client.ui.DrawManager drawManager;
-
-	@Inject
-	private java.util.concurrent.ScheduledExecutorService executor;
 
 	private Gson prettyGson;
 	private RuneAIPanel panel;
@@ -145,9 +140,6 @@ public class RuneAIPlugin extends Plugin
 	private long bankValue = -1; // unknown until the bank is opened once
 	private boolean bondAnnounced;
 
-	// ---- TEMP: auto-screenshot the plugin being useful (for README; remove after) ----
-	private int shotsTaken;
-	private long lastShotMs;
 
 	@Override
 	protected void startUp() throws Exception
@@ -330,53 +322,6 @@ public class RuneAIPlugin extends Plugin
 		damageTakenThisTick = 0;
 	}
 
-	// ================= auto-screenshot (TEMP, for README) =================
-
-	/**
-	 * Capture the client ~0.7s after a useful moment fires, so the tile
-	 * marker pulse, alert banner, and mascot mid-speech are all in frame.
-	 */
-	private void captureUsefulMoment(String trigger)
-	{
-		if (!config.screenshotMode() || shotsTaken >= 8)
-		{
-			return;
-		}
-		final long now = System.currentTimeMillis();
-		if (now - lastShotMs < 15_000)
-		{
-			return;
-		}
-		lastShotMs = now;
-
-		executor.schedule(() -> drawManager.requestNextFrameListener(img ->
-		{
-			try
-			{
-				final java.awt.image.BufferedImage bi = new java.awt.image.BufferedImage(
-					img.getWidth(null), img.getHeight(null), java.awt.image.BufferedImage.TYPE_INT_RGB);
-				final java.awt.Graphics2D g2 = bi.createGraphics();
-				g2.drawImage(img, 0, 0, null);
-				g2.dispose();
-				final File dir = new File(DATA_DIR, "shots");
-				dir.mkdirs();
-				final File f = new File(dir,
-					"shot-" + trigger + "-" + LocalDateTime.now().format(STAMP) + ".png");
-				javax.imageio.ImageIO.write(bi, "png", f);
-				shotsTaken++;
-				log.info("RuneAI screenshot #{} ({}) -> {}", shotsTaken, trigger, f.getAbsolutePath());
-				voice.play("shot");
-				clientThread.invoke(() -> client.addChatMessage(ChatMessageType.GAMEMESSAGE, "",
-					"<col=00b4ff>RuneAI</col> 📸 shot #" + shotsTaken + " (" + trigger
-						+ ") saved — close RuneLite whenever you're happy.", null));
-			}
-			catch (Exception ex)
-			{
-				log.warn("screenshot failed", ex);
-			}
-		}), 700, java.util.concurrent.TimeUnit.MILLISECONDS);
-	}
-
 	// ================= activity guidance =================
 
 	/** What is the user doing? Derived from recent xp drops — free, exact signal. */
@@ -467,7 +412,6 @@ public class RuneAIPlugin extends Plugin
 					overlay.setAlert("NO FOOD — get out / bank", tick + 5);
 					voice.play("bank");
 				}
-				captureUsefulMoment("eat-alert");
 			}
 		}
 
@@ -519,7 +463,6 @@ public class RuneAIPlugin extends Plugin
 				overlay.flashTile((WorldPoint) target[0], RuneAIOverlay.GUIDE,
 					"Click: " + target[1], tick + 6);
 				voice.play("idle");
-				captureUsefulMoment("guidance");
 			}
 		}
 	}
@@ -574,7 +517,6 @@ public class RuneAIPlugin extends Plugin
 				lastPotRemindTick = tick;
 				overlay.setAlert("Pot up — " + name, tick + 5);
 				voice.play("pot");
-				captureUsefulMoment("pot-up");
 				return;
 			}
 		}
@@ -1073,7 +1015,6 @@ public class RuneAIPlugin extends Plugin
 				overlay.flashTile(wp, RuneAIOverlay.LOOT, name + " · " + value + " gp",
 					client.getTickCount() + 12);
 				voice.play("loot");
-				captureUsefulMoment("loot");
 			}
 		}
 

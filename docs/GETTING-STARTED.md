@@ -32,7 +32,6 @@ RuneAI is **not on the RuneLite Plugin Hub yet**. Today you run it from source w
 | Rune the mascot | An animated companion that bobs, blinks, and **lip-syncs to the live audio amplitude** of whatever line is playing, with a speech bubble of the text. |
 | Session P&L | A live gp ledger in the sidebar from inventory + equipment GE-value deltas. |
 | Data layer | Per-tick state vectors, a full event stream, and a login snapshot written to your own machine. |
-| Auto-screenshots (temporary) | On by default: saves up to 8 PNGs per session to `~/.runelite/runeai/shots/` when a useful moment fires, for the README. Toggle it off with **Auto-screenshot useful moments**. |
 
 ### Voice lines that exist today
 
@@ -46,7 +45,6 @@ Eight bundled clips (mono 16-bit PCM, 24 kHz), each with a 12-second per-line co
 | `loot` | "Good drop. Grab it." |
 | `attacked` | "You're under attack." |
 | `pot` | "Pot up. Drink your potion." |
-| `shot` | "Got the shot. Close RuneLite when you are ready." |
 | `bond` | "You can afford a bond. Time to go members." |
 
 ---
@@ -140,7 +138,6 @@ Open the **wrench icon** in the RuneLite sidebar (Configuration), then find **Ru
 | Login greeting | `greeting` | `Welcome back` | The message RuneAI sends in chat when you log in. |
 | Log live events | `logEvents` | on | Stream all game events to `events-*.jsonl`. **Restart the plugin to apply.** |
 | Log varbit changes | `logVarbits` | on | Include raw varbit/varp changes in the event stream (very chatty on login). |
-| Auto-screenshot useful moments | `screenshotMode` | on | **Temporary.** Saves up to 8 PNGs per session to `~/.runelite/runeai/shots/` ~0.7s after guidance/alerts fire, one every 15s at most, each followed by a chat line and the `shot` voice callout. |
 | Track session profit/loss | `trackPnl` | on | The live gp ledger. |
 | Show mascot | `showMascot` | on | Show or hide Rune. |
 | Voice callouts | `voiceCallouts` | on | Spoken guidance. Turn off for total silence. |
@@ -159,7 +156,6 @@ Open the **wrench icon** in the RuneLite sidebar (Configuration), then find **Ru
 - **Hide Rune:** uncheck **Show mascot**. Immediate.
 - **Hide all in-world drawing:** uncheck **Show overlays**. This kills combat outlines, tile flashes, and the alert banner, but leaves the sidebar panel and voice alone.
 - **Stop the P&L ledger:** uncheck **Track session profit/loss**.
-- **Stop the screenshots:** uncheck **Auto-screenshot useful moments**. Immediate.
 - **Stop writing files:** uncheck **Log live events** and **Record tick vectors**, then toggle the RuneAI plugin off and back on (those two are only read when the plugin starts up).
 
 ### How Session P&L works
@@ -181,14 +177,13 @@ Everything RuneAI writes goes to the `runeai` folder inside your RuneLite direct
 | Windows | `C:\Users\<you>\.runelite\runeai\` |
 | macOS / Linux | `~/.runelite/runeai/` |
 
-Three kinds of file, all timestamped `yyyyMMdd-HHmmss`, plus a `shots/` sub-folder of PNGs while screenshot mode is on:
+Three kinds of file, all timestamped `yyyyMMdd-HHmmss`:
 
 | File | Contents |
 | --- | --- |
 | `events-<stamp>.jsonl` | The live event stream. One JSON object per line: `{"t": iso-time, "tick": n, "e": type, ...}`. Types include `gameState`, `chat`, `stat`, `hitsplat`, `death`, `animation`, `graphic`, `graphicsObject`, `projectile`, `interacting`, `container`, `click`, `npcSpawn`/`npcDespawn`, `playerSpawn`/`playerDespawn`, `itemSpawn`/`itemDespawn`, `varbit`, `heartbeat`, `pnl`. |
 | `ticks-<stamp>.jsonl` | One fixed-shape vector per game tick: position, region, hp/hpMax, prayer, run energy, spec, animation, pose, graphic, damage taken, session P&L, detected activity, goal mode (`gp`/`xp`), session XP gained, members-world flag, total GE worth, worn item ids, current target NPC id, and the nearest 8 NPCs with distance/animation/health-ratio/"is it attacking me". |
 | `snapshot-<stamp>.json` | A pretty-printed full game-state dump written ~8 ticks after each login (one per login, not one per session). |
-| `shots/shot-<trigger>-<stamp>.png` | Screenshots from **Auto-screenshot useful moments**, max 8 per session. |
 
 **These files are local only. They are never uploaded anywhere, and they are never committed to the repo.** They are your data, on your disk. Delete the folder any time — RuneAI recreates it on next start.
 
@@ -282,4 +277,4 @@ Open an issue at <https://github.com/lordbasilaiassistant-sudo/runeai>.
 
 ---
 
-*Screenshots coming.*
+![RuneAI in action](img/runeai-in-action.png)

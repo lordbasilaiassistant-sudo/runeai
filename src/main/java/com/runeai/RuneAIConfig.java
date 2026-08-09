@@ -38,16 +38,6 @@ public interface RuneAIConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "screenshotMode",
-		name = "Auto-screenshot useful moments",
-		description = "TEMP: capture a PNG ~0.7s after guidance/alerts fire (max 8/session) for the README, then tell you it's safe to close"
-	)
-	default boolean screenshotMode()
-	{
-		return false;
-	}
-
-	@ConfigItem(
 		keyName = "trackPnl",
 		name = "Track session profit/loss",
 		description = "Live gp ledger: loot kept and pickups count up, drops and consumed supplies count down; banking/GE are neutral transfers"

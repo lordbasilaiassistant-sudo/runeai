@@ -10,7 +10,9 @@ Last updated: 2026-08-09
 
 RuneAI is an AI assistant / AI companion overlay for OSRS. The plugin reads the RuneLite API — your skills, inventory, nearby NPCs, ground items, animations — and turns that into on-screen guidance and spoken voice callouts. It contains no input automation: no mouse movement, no keyboard injection, no pathing, no scripted actions. The mascot, "Rune", is a drawn overlay character that lip-syncs to the voice lines so the coaching feels like someone is actually sitting with you.
 
-Screenshots coming.
+![RuneAI in action: the pixel mascot calls out "Good drop. Grab it." in classic overhead text while combat targets are outlined](docs/img/runeai-in-action.png)
+
+*RuneAI in action at the Hill Giants: Rune (the pixel mascot, bottom) speaking a loot callout in classic OSRS overhead text, with the player's target tile-marked.*
 
 ## Features
 
@@ -55,11 +57,8 @@ If your inventory hits 28 items while you are doing a **non-combat** activity, t
 ### F2P bond ladder
 On a free-to-play world, RuneAI tracks how close you are to buying an Old School Bond. Roughly every 50 ticks it prices the bond from the GE and compares it against your total worth — inventory + equipment, plus your bank as of the last time you opened it. The sidebar shows a **Bond fund** row as a percentage (`63% of 12,000k`, with a `*` while the bank has never been opened this session, `members ✓` on a members world). When your worth first covers the bond price, a `You can afford a BOND — go members!` alert fires once with the voice line "You can afford a bond. Time to go members."
 
-### Auto-screenshot mode (temporary)
-**Auto-screenshot useful moments** (`screenshotMode`, on by default) captures a PNG about 0.7 s after a guidance, eat, pot-up, or loot moment fires, so the tile marker, alert banner, and mascot are all in frame. Shots land in `~/.runelite/runeai/shots/shot-<trigger>-<timestamp>.png`, capped at **8 per session** and at most one every 15 seconds; each one plays the `shot` voice line and posts a chat confirmation. This exists to produce README screenshots and is intended to be removed — turn it off in the config if you do not want it.
-
 ### Kokoro voice callouts (local, offline)
-Voice is eight pre-rendered WAV files (mono 16-bit PCM, 24 kHz) generated with local Kokoro TTS and bundled as plugin resources in `src/main/resources/com/runeai/voice/`:
+Voice is seven pre-rendered WAV files (mono 16-bit PCM, 24 kHz) generated with local Kokoro TTS and bundled as plugin resources in `src/main/resources/com/runeai/voice/`:
 
 | Key | Line |
 | --- | --- |
@@ -69,13 +68,12 @@ Voice is eight pre-rendered WAV files (mono 16-bit PCM, 24 kHz) generated with l
 | `loot` | "Good drop. Grab it." |
 | `attacked` | "You're under attack." |
 | `pot` | "Pot up. Drink your potion." |
-| `shot` | "Got the shot. Close RuneLite when you are ready." |
 | `bond` | "You can afford a bond. Time to go members." |
 
-Playback happens on a daemon thread through `javax.sound.sampled`. Each line has a 12-second per-key cooldown so RuneAI never nags. No network call is ever made to speak — there is no TTS API in this plugin.
+Playback goes through a single-thread speech queue, so lines never overlap — one finishes (plus a 400 ms breath) before the next starts, and if two lines are already queued, new ones are dropped rather than backlogged. Each line also has a 12-second per-key cooldown so RuneAI never nags. No network call is ever made to speak — there is no TTS API in this plugin.
 
-### Rune, the mascot — real lip sync + Alt-drag
-`MascotOverlay` draws Rune as an animated wisp: gradient body, breathing glow, squash-and-stretch bob, randomised blinking, drifting pupils, orbiting sparkles, and a wrapped speech bubble showing the current line. The mouth is driven by a **real amplitude envelope**: `VoicePlayer` decodes the WAV to PCM, computes an RMS value per ~33 ms hop normalised to the clip's peak, then samples that envelope from the clip's actual frame position during playback. The mouth shape follows the audio, not a fake loop. The mascot overlay is movable — **hold Alt and drag** to park it anywhere on screen (standard RuneLite overlay dragging).
+### Rune, the mascot — OSRS-style pixel pet with real lip sync
+`MascotOverlay` draws Rune as a chunky pixel-art imp in the game's own visual language: flat shading bands (no gradients), a dark sprite outline, two horns, stub feet, randomised blinking, and a bob quantised to whole pixels so it moves like a retro sprite. It speaks in classic OSRS overhead text — yellow with a hard black shadow — rather than a modern bubble. The mouth is three retro visemes (closed / half / open) driven by a **real amplitude envelope**: `VoicePlayer` decodes the WAV to PCM, computes an RMS value per ~33 ms hop normalised to the clip's peak, then samples that envelope from the clip's actual frame position during playback. The mouth follows the audio, not a fake loop. The mascot overlay is movable — **hold Alt and drag** to park it anywhere on screen (standard RuneLite overlay dragging).
 
 ### Session P&L ledger
 RuneAI keeps a live gp ledger of your session, shown as **Session P&L** in the sidebar panel and written into the tick vectors as `pnl`.
@@ -92,7 +90,7 @@ Exact accounting rules, as implemented:
 - Positive deltas additionally feed `gainedValue`, one half of the gp-vs-xp goal signal.
 
 ### Full data layer + trainable tick vectors
-Three local recording streams, all written to `~/.runelite/runeai/` (plus the PNGs from screenshot mode in `shots/`):
+Three local recording streams, all written to `~/.runelite/runeai/`:
 
 1. **`ticks-<timestamp>.jsonl`** — one fixed-shape vector per game tick: position (`x`, `y`, `plane`, `region`), `hp`/`hpMax`, `pray`, run `energy`, `spec`, `anim`, `pose`, `graphic`, `dmgTaken` (damage you took this tick — the built-in training label), `pnl`, `activity` (detected activity name or `null`), `goal` (`"gp"` or `"xp"`), `xpGained` (session XP total), `members` (members world flag), `worth` (total GE worth incl. last-seen bank), `equip` (worn item ids), `targetNpcId`, `npcCount`, and the nearest 8 NPCs each with `id`, `dist`, `anim`, `hr` (health ratio) and `atkMe`.
 2. **`events-<timestamp>.jsonl`** — the live event stream, one JSON object per line shaped `{"t": iso-time, "tick": n, "e": type, ...}`. Event types emitted: `gameState`, `heartbeat`, `chat`, `stat`, `hitsplat`, `death`, `animation`, `graphic`, `graphicsObject`, `projectile`, `interacting`, `container`, `pnl`, `click`, `npcSpawn`, `npcDespawn`, `playerSpawn`, `playerDespawn`, `itemSpawn`, `itemDespawn`, `varbit`.
@@ -137,7 +135,6 @@ All settings live under the **RuneAI** section of the RuneLite plugin config (co
 | Login greeting | `greeting` | String | `Welcome back` | Message RuneAI sends in chat when you log in |
 | Log live events | `logEvents` | boolean | `true` | Stream all game events to `.runelite/runeai/events-*.jsonl` (restart plugin to apply) |
 | Log varbit changes | `logVarbits` | boolean | `true` | Include raw varbit/varp changes in the event stream (very chatty on login) |
-| Auto-screenshot useful moments | `screenshotMode` | boolean | `true` | TEMP: capture a PNG ~0.7s after guidance/alerts fire (max 8/session) for the README, then tell you it's safe to close |
 | Track session profit/loss | `trackPnl` | boolean | `true` | Live gp ledger; banking/GE are neutral transfers |
 | Show mascot | `showMascot` | boolean | `true` | Rune, the lip-syncing companion — Alt-drag to move it anywhere |
 | Voice callouts | `voiceCallouts` | boolean | `true` | Spoken guidance: idle nudges, eat warnings, bank reminders, loot calls |
@@ -156,7 +153,7 @@ The RuneAI panel shows Game state, Player, detected Activity (formatted `<activi
 
 ## Data & privacy
 
-- **Everything recorded stays on your own machine.** All three streams — and the screenshot PNGs in `~/.runelite/runeai/shots/` — are written to your local disk.
+- **Everything recorded stays on your own machine.** All three streams are written to your local disk.
 - **The plugin makes no network requests.** There is no telemetry, no analytics, no upload, and no remote AI service call anywhere in the source. Voice is local WAV playback; guidance is local rule code; the danger model trains locally in numpy.
 - Recorded files can contain your account name and other players' names, so the repository's `.gitignore` excludes `*.jsonl`, `snapshot-*.json`, and `train/damage_model.json`. Recorded data is never committed.
 - To stop recording entirely, turn off **Log live events** and **Record tick vectors** and restart the plugin. To delete recordings, delete the files in `~/.runelite/runeai/`.
@@ -179,7 +176,7 @@ All eight callout lines were pre-rendered with local Kokoro TTS and shipped as W
 Not yet. Today you run it from source with `./gradlew run`.
 
 ### Can I turn features off individually?
-Mostly. Overlays, voice, mascot, idle guidance, pot reminder, low-HP alert, P&L tracking, auto-screenshots, and both recording streams each have their own toggle (see the configuration table). The bank nudge and the F2P bond ladder currently have no dedicated switch — turning off **Show overlays** and **Voice callouts** silences them.
+Mostly. Overlays, voice, mascot, idle guidance, pot reminder, low-HP alert, P&L tracking, and both recording streams each have their own toggle (see the configuration table). The bank nudge and the F2P bond ladder currently have no dedicated switch — turning off **Show overlays** and **Voice callouts** silences them.
 
 ## Support
 

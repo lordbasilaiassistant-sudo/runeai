@@ -32,7 +32,6 @@ class VoicePlayer
 		"loot", "Good drop. Grab it.",
 		"attacked", "You're under attack.",
 		"pot", "Pot up. Drink your potion.",
-		"shot", "Got the shot. Close RuneLite when you are ready.",
 		"bond", "You can afford a bond. Time to go members.");
 
 	private final RuneAIConfig config;

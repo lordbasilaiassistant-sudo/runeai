@@ -52,7 +52,6 @@ RuneLite events ──> RuneAIPlugin (@Subscribe handlers)
                        ├─> EventLog        -> ~/.runelite/runeai/events-*.jsonl
                        ├─> tick vectors    -> ~/.runelite/runeai/ticks-*.jsonl
                        ├─> GameStateSnapshot -> ~/.runelite/runeai/snapshot-*.json (once per login, ~8 ticks after)
-                       ├─> DrawManager frame  -> ~/.runelite/runeai/shots/*.png (TEMP screenshotMode, max 8)
                        ├─> RuneAIOverlay.flashTile()/setAlert()   (draw)
                        ├─> VoicePlayer.play(key)                  (speak)  -> MascotOverlay lip-sync
                        └─> RuneAIPanel.setX()                     (sidebar)
@@ -84,11 +83,8 @@ RuneLite events ──> RuneAIPlugin (@Subscribe handlers)
   (coins count as 1 gp each). `pnlPaused()` suppresses the ledger while widget groups
   12 / 465 / 192 / 300 (bank, GE, deposit box, shop) are open, because those are transfers, not profit.
   `GameState.LOGIN_SCREEN` clears `lastHolding` only — `sessionPnl` is not reset.
-- **Auto-screenshot (TEMP)** — `captureUsefulMoment(trigger)` behind `screenshotMode()`; `executor.schedule`
-  + `drawManager.requestNextFrameListener` at 700 ms, PNG into `DATA_DIR/shots`, max 8 per session, 15 s
-  apart. Marked for removal — do not build on it.
-- **Voice** — `VoicePlayer.LINES` is the source of truth for the eight keys and their text:
-  `idle`, `eat`, `bank`, `loot`, `attacked`, `pot`, `shot`, `bond`.
+- **Voice** — `VoicePlayer.LINES` is the source of truth for the seven keys and their text:
+  `idle`, `eat`, `bank`, `loot`, `attacked`, `pot`, `bond`.
 
 ---
 
@@ -166,7 +162,7 @@ method, move it. `render()` runs every frame — keep the work in there minimal.
 
 Clips are bundled resources: `src/main/resources/com/runeai/voice/<key>.wav`, loaded by
 `VoicePlayer.speak()` at `/com/runeai/voice/<key>.wav`. Current keys: `idle`, `eat`, `bank`, `loot`,
-`attacked`, `pot`, `shot`, `bond`. All eight shipped files are mono 16-bit PCM at 24 kHz.
+`attacked`, `pot`, `bond`. All seven shipped files are mono 16-bit PCM at 24 kHz.
 
 To add or change a line:
 

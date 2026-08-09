@@ -20,13 +20,8 @@ Source of truth for this document:
 | `ticks-<yyyyMMdd-HHmmss>.jsonl` | `RuneAIPlugin.recordTickVector()` | one line per game tick | fixed-shape training corpus for the danger model |
 | `events-<yyyyMMdd-HHmmss>.jsonl` | `RuneAIPlugin.emit()` | one line per game event | variable-shape event stream (chat, hitsplats, clicks, spawns…) |
 | `snapshot-<yyyyMMdd-HHmmss>.json` | `GameStateSnapshot.capture()` | once per login, ~8 ticks after | one full dump of everything the RuneLite API exposes |
-| `shots/shot-<trigger>-<yyyyMMdd-HHmmss>.png` | `captureUsefulMoment()` | up to 8 per session | temporary screenshot mode — see [screenshot mode](#screenshot-mode-temporary) |
 
-The data directory is `new File(RuneLite.RUNELITE_DIR, "runeai")` — on Windows that resolves to `C:\Users\<you>\.runelite\runeai\`. Every filename is stamped with `DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")`: the two JSONL names are stamped once in `startUp()`, so each plugin session gets its own pair, while snapshot and screenshot names are stamped at write time.
-
-### Screenshot mode (temporary)
-
-`captureUsefulMoment(trigger)` is a deliberately short-lived feature for producing README images, gated behind the `screenshotMode` config key (**default on**). When a guidance flash, EAT alert, pot-up reminder, or loot flash fires, it schedules `DrawManager.requestNextFrameListener` ~700 ms later, writes the frame as a PNG to `~/.runelite/runeai/shots/`, plays the `shot` voice line, and posts a chat message. It is capped at **8 shots per plugin session** and at most **one per 15 seconds**. These PNGs are game screenshots and can contain your account name and chat — treat them like the JSONL files.
+The data directory is `new File(RuneLite.RUNELITE_DIR, "runeai")` — on Windows that resolves to `C:\Users\<you>\.runelite\runeai\`. Every filename is stamped with `DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")`: the two JSONL names are stamped once in `startUp()`, so each plugin session gets its own pair, while snapshot names are stamped at write time.
 
 ### Shared JSONL envelope
 
@@ -51,7 +46,6 @@ The writer is append-only, UTF-8, and flushes every 50 lines. Killing the client
 | `logVarbits` | `true` | includes `varbit` events in the event stream (very chatty on login) |
 | `heartbeatTicks` | `10` | interval for the `heartbeat` event |
 | `trackPnl` | `true` | enables the session profit/loss ledger that feeds the `pnl` field, the `pnl` event, and (through `gainedValue`) the `goal` field |
-| `screenshotMode` | `true` | writes PNGs to `shots/` when a useful moment fires (temporary feature) |
 
 Both log files are opened once in `startUp()`. Toggling `recordTicks` or `logEvents` mid-session does nothing until the plugin restarts.
 
@@ -291,11 +285,11 @@ That is roughly zero milliseconds per tick, adds no runtime dependency, no Pytho
 
 ## Privacy guarantees
 
-- **Local only.** Every file described here is written to `~/.runelite/runeai/` on your own machine — the JSON via `java.nio.file.Files`, the screenshots via `javax.imageio.ImageIO`. The plugin contains no HTTP client, no telemetry, no analytics, and no upload path of any kind.
+- **Local only.** Every file described here is written to `~/.runelite/runeai/` on your own machine — via `java.nio.file.Files`. The plugin contains no HTTP client, no telemetry, no analytics, and no upload path of any kind.
 - **Nothing is committed.** The repository `.gitignore` excludes `*.jsonl`, `snapshot-*.json`, and `train/damage_model.json`, under the comment `# recorded game data must never go public (contains account names)`.
-- **You can turn it off.** Set `recordTicks` to `false` to stop tick vectors, `logEvents` to `false` to stop the event stream, `logVarbits` to `false` to drop varbit records from the stream, and `screenshotMode` to `false` to stop the PNGs. Restart the plugin for the two file switches to take effect; the varbit and screenshot switches apply immediately.
+- **You can turn it off.** Set `recordTicks` to `false` to stop tick vectors, `logEvents` to `false` to stop the event stream, and `logVarbits` to `false` to drop varbit records from the stream. Restart the plugin for the two file switches to take effect; the varbit switch applies immediately.
 - **You can delete it.** The recordings are ordinary text files. Deleting the contents of `~/.runelite/runeai/` removes everything the plugin has ever recorded; a new session simply starts fresh files.
-- **The data is identifying.** Snapshots include your account name, skills, inventory, equipment and bank. Event streams include your chat messages. Screenshots show whatever was on screen, chat included. Never paste raw recordings into a public issue, Discord, or pull request — and note that `.gitignore` covers the JSON/JSONL patterns but not `*.png`, so check any screenshot before it goes near the repo.
+- **The data is identifying.** Snapshots include your account name, skills, inventory, equipment and bank. Event streams include your chat messages. Never paste raw recordings into a public issue, Discord, or pull request.
 
 ## FAQ
 
