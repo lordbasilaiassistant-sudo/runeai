@@ -16,7 +16,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 from progress import run, boss_report
 
 ANTHONY = dict(
-    skills=dict(Attack=73, Strength=71, Defence=72, Hitpoints=77, Prayer=56,
+    skills=dict(Attack=73, Strength=71, Defence=72, Hitpoints=77, Prayer=56, Ranged=78,
                 Mining=49, Fishing=50, Woodcutting=63, Runecraft=53, Hunter=1),
     gp=200_000,           # carried + misc; bank uncalibrated
     weapon="Rune scimitar",
@@ -25,7 +25,7 @@ ANTHONY = dict(
 )
 
 FRESH = dict(
-    skills=dict(Attack=40, Strength=40, Defence=40, Hitpoints=40, Prayer=31,
+    skills=dict(Attack=40, Strength=40, Defence=40, Hitpoints=40, Prayer=31, Ranged=40,
                 Mining=15, Fishing=20, Woodcutting=30, Runecraft=10, Hunter=1),
     gp=20_000,
     weapon="Rune scimitar",

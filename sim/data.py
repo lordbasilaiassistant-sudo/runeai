@@ -59,8 +59,16 @@ WEAPONS = [
     dict(name="Rune 2h sword",     att=69, str_=70, speed=7, req_att=40, cost=38000,   members=False),
     dict(name="Dragon scimitar",   att=67, str_=66, speed=4, req_att=60, cost=60000,   members=True),
     dict(name="Sarachnis cudgel",  att=79, str_=88, speed=4, req_att=65, cost=350000,  members=True),  # crush; approx as ladder step
-    dict(name="Abyssal whip",      att=82, str_=82, speed=4, req_att=70, cost=1500000, members=True),
+    dict(name="Abyssal whip",      att=82, str_=82, speed=4, req_att=70, cost=1500000, members=True, iron_grind_h=25),
     dict(name="Abyssal tentacle",  att=90, str_=86, speed=4, req_att=75, cost=2600000, members=True),
+]
+
+# ranged ladder: r_att = ranged attack bonus, r_str = ranged strength (VERIFY approx)
+RANGED_WEAPONS = [
+    dict(name="Maple shortbow + rune",   r_att=29, r_str=49, speed=4, req_ranged=30, cost=15000,   members=False, iron_grind_h=1),
+    dict(name="Magic shortbow + rune",   r_att=69, r_str=49, speed=4, req_ranged=50, cost=25000,   members=True,  iron_grind_h=3),
+    dict(name="Rune crossbow + broads",  r_att=90, r_str=100, speed=6, req_ranged=61, cost=100000, members=True,  iron_grind_h=8),
+    dict(name="Toxic blowpipe (dragon)", r_att=60, r_str=80, speed=3, req_ranged=75, cost=4200000, members=True,  iron_grind_h=60),
 ]
 
 ARMOUR = [

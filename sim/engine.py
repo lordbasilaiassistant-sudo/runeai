@@ -40,6 +40,8 @@ class PlayerState:
     bonus_str: int = 0
     pray_att_mult: float = 1.0  # Piety-style prayers once unlocked
     pray_str_mult: float = 1.0
+    ranged: int = 1
+    rweapon: dict = None      # owned ranged setup, or None
 
 
 def _boosted(p: PlayerState):
@@ -60,12 +62,27 @@ def _wstr(p):
     return p.weapon["str_"] + p.bonus_str
 
 
-def combat_rates(p: PlayerState, mon: dict, food_slots: int = 24) -> dict:
+def best_offense(p: PlayerState, mon: dict):
+    """Pick melee vs ranged per target: (max_hit, hit_chance, speed, style)."""
     b_att, b_str = _boosted(p)
-    mhit = max_hit(b_str, _wstr(p))
-    p_hit = hit_chance(attack_roll(b_att, _watt(p)),
-                       npc_defence_roll(mon["def_"], mon["style_def"]))
-    out_dps = dps(p_hit, mhit, p.weapon["speed"])
+    m_h = max_hit(b_str, _wstr(p))
+    m_c = hit_chance(attack_roll(b_att, _watt(p)),
+                     npc_defence_roll(mon["def_"], mon["style_def"]))
+    best = (m_h, m_c, p.weapon["speed"], "melee")
+    if p.rweapon:
+        r_h = max_hit(p.ranged, p.rweapon["r_str"])
+        r_c = hit_chance(attack_roll(p.ranged, p.rweapon["r_att"] + p.bonus_att),
+                         npc_defence_roll(mon["def_"], mon.get("style_def_range", mon["style_def"])))
+        r_dps = r_c * r_h / p.rweapon["speed"]
+        m_dps = m_c * m_h / p.weapon["speed"]
+        if r_dps > m_dps:
+            best = (r_h, r_c, p.rweapon["speed"], "ranged")
+    return best
+
+
+def combat_rates(p: PlayerState, mon: dict, food_slots: int = 24) -> dict:
+    mhit, p_hit, spd, style = best_offense(p, mon)
+    out_dps = dps(p_hit, mhit, spd)
     if out_dps <= 0:
         return dict(feasible=False)
     kill_s = mon["hp"] / out_dps + mon["find_s"]
@@ -101,10 +118,7 @@ def boss_fight_mc(p: PlayerState, mon: dict, kills_so_far: int = 0,
     attacks = mon.get("attacks") or [dict(style="melee", max_hit=mon["max_hit"],
                                           speed=mon["speed"], blockable=True)]
     mechanics = mon.get("mechanics", [])
-    b_att, b_str = _boosted(p)
-    mhit = max_hit(b_str, _wstr(p))
-    p_chance = hit_chance(attack_roll(b_att, _watt(p)),
-                          npc_defence_roll(mon["def_"], mon["style_def"]))
+    mhit, p_chance, pspeed, pstyle = best_offense(p, mon)
     # protect the style with the highest blockable expected dps
     def exp_dps(a):
         ch = hit_chance(attack_roll(mon["att"], 0),
@@ -131,7 +145,7 @@ def boss_fight_mc(p: PlayerState, mon: dict, kills_so_far: int = 0,
             if p_cd <= 0:
                 if random.random() < p_chance:
                     bhp -= random.randint(0, mhit)
-                p_cd = p.weapon["speed"]
+                p_cd = pspeed
             # boss/minion attacks
             for i, a in enumerate(attacks):
                 if cds[i] <= 0:
@@ -182,4 +196,19 @@ def boss_fight_mc(p: PlayerState, mon: dict, kills_so_far: int = 0,
     gp_hr = kills_hr * (mon["avg_drop"] - entry) - kills_hr * supplies - death_cost_hr
     return dict(win_rate=wins / trials, avg_kill_s=avg_t, avg_food=avg_food,
                 kills_hr=kills_hr, gp_hr=gp_hr, protected=protected_style,
-                deaths=deaths, trials=trials)
+                deaths=deaths, trials=trials, style=pstyle)
+
+
+# ---- memoized MC for population-scale runs: state rounded into bands ----
+_MC_CACHE = {}
+
+
+def boss_fight_cached(p: PlayerState, mon_name: str, mon: dict, kills_so_far: int,
+                      trials: int = 200) -> dict:
+    key = (mon_name, p.weapon["name"], p.rweapon["name"] if p.rweapon else None,
+           p.armour["name"], p.att // 3, p.str_ // 3, p.def_ // 3, p.hp // 5,
+           int(p.prayer) // 10, min(kills_so_far // 15, 8), p.members,
+           p.bonus_str, round(p.pray_str_mult, 2))
+    if key not in _MC_CACHE:
+        _MC_CACHE[key] = boss_fight_mc(p, mon, kills_so_far, trials=trials)
+    return _MC_CACHE[key]

@@ -8,8 +8,8 @@ challenge fights the agent must actually win in the Monte Carlo engine.
 from dataclasses import dataclass
 
 from osrs_math import level_for_xp, xp_for_level
-from data import MONSTERS, WEAPONS, ARMOUR, FOODS, SKILLING, BOND_PRICE
-from engine import PlayerState, combat_rates, boss_fight_mc
+from data import MONSTERS, WEAPONS, RANGED_WEAPONS, ARMOUR, FOODS, SKILLING, BOND_PRICE
+from engine import PlayerState, combat_rates, boss_fight_mc, boss_fight_cached
 from unlocks import UNLOCKS, TRIAL_BOSSES, available, blocking_skill
 
 BLOCK_H = 6.0
@@ -72,6 +72,11 @@ def next_upgrade(p):
             continue
         if w["str_"] > p.weapon["str_"]:
             return ("weapon", w)
+    for w in RANGED_WEAPONS:
+        if w["members"] and not p.members:
+            continue
+        if p.rweapon is None or w["r_str"] + w["r_att"] > p.rweapon["r_str"] + p.rweapon["r_att"]:
+            return ("rweapon", w)
     for a in ARMOUR:
         if a["members"] and not p.members:
             continue
@@ -102,6 +107,7 @@ def run(start: dict, days: int = 60, verbose=True, ironman: bool = False):
     )
     p.ironman = ironman
     p.prayer = skills.get("Prayer", 43)
+    p.ranged = skills.get("Ranged", 1)
     p.food = best_food(p)
     done, clog, pvm_kc = set(), 0, {}
     shelved = {}  # trial name -> combat-power snapshot when we gave up
@@ -133,7 +139,7 @@ def run(start: dict, days: int = 60, verbose=True, ironman: bool = False):
             trial = u.get("trial_boss")
             if trial:
                 kc = pvm_kc.get(trial, 0)
-                r = boss_fight_mc(p, TRIAL_BOSSES[trial], kills_so_far=kc, trials=120)
+                r = boss_fight_cached(p, trial, TRIAL_BOSSES[trial], kc, trials=120)
                 if r["win_rate"] >= 0.30:
                     done.add(u["name"])
                     clog += u["clog"]
@@ -166,18 +172,23 @@ def run(start: dict, days: int = 60, verbose=True, ironman: bool = False):
         # 3. gear (GE path; irons grind drops instead — not yet modeled)
         up = next_upgrade(p)
         train_target = None
-        if up and not p.ironman:
+        if up:
             kind, item = up
-            req_skill = "Attack" if kind == "weapon" else "Defence"
-            req = item.get("req_att", item.get("req_def", 1))
-            if skills[req_skill] < req:
+            req_skill = {"weapon": "Attack", "rweapon": "Ranged", "armour": "Defence"}[kind]
+            req = item.get("req_att") or item.get("req_ranged") or item.get("req_def", 1)
+            slot = {"weapon": "weapon", "rweapon": "rweapon", "armour": "armour"}[kind]
+            if skills.get(req_skill, 1) < req:
                 train_target = req_skill
+            elif p.ironman:
+                # irons grind the drop/materials instead of the GE
+                gh = item.get("iron_grind_h", item["cost"] / 150000)
+                hours += gh
+                setattr(p, slot, item)
+                note(f"iron-grind {item['name']} ({gh:.0f}h)")
+                continue
             elif p.gp >= item["cost"] * 1.2:
                 p.gp -= item["cost"]
-                if kind == "weapon":
-                    p.weapon = item
-                else:
-                    p.armour = item
+                setattr(p, slot, item)
                 note(f"bought {item['name']} ({item['cost']:,} gp)")
                 continue
 
@@ -190,7 +201,7 @@ def run(start: dict, days: int = 60, verbose=True, ironman: bool = False):
         if train_target and cam_xp:
             act, gp_hr, xp_hr, gain = (f"train {train_target} @ {cam_xp['name']}",
                                        cam_xp["gp_hr"], cam_xp["xp_hr"], train_target)
-        elif gate and gate[0] in ("Attack", "Strength", "Defence", "Hitpoints") and cam_xp:
+        elif gate and gate[0] in ("Attack", "Strength", "Defence", "Hitpoints", "Ranged") and cam_xp:
             act, gp_hr, xp_hr, gain = (f"train {gate[0]} for {gate[2]} @ {cam_xp['name']}",
                                        cam_xp["gp_hr"], cam_xp["xp_hr"], gate[0])
         elif gate:
