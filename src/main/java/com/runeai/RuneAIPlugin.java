@@ -94,6 +94,9 @@ public class RuneAIPlugin extends Plugin
 	private VoicePlayer voice;
 
 	@Inject
+	private MascotOverlay mascot;
+
+	@Inject
 	private net.runelite.client.game.ItemManager itemManager;
 
 	private Gson prettyGson;
@@ -118,6 +121,10 @@ public class RuneAIPlugin extends Plugin
 	private int lastGuideTick;
 	private int lastPotRemindTick;
 	private boolean wasUnderAttack;
+
+	// ---- session P&L ledger (inventory+equipment deltas at GE value) ----
+	private Map<Integer, Integer> lastHolding;
+	private long sessionPnl;
 
 	@Override
 	protected void startUp() throws Exception
@@ -149,6 +156,7 @@ public class RuneAIPlugin extends Plugin
 			.build();
 		clientToolbar.addNavigation(navButton);
 		overlayManager.add(overlay);
+		overlayManager.add(mascot);
 		log.info("RuneAI plugin started (data dir {})", DATA_DIR.getAbsolutePath());
 	}
 
@@ -157,6 +165,7 @@ public class RuneAIPlugin extends Plugin
 	{
 		clientToolbar.removeNavigation(navButton);
 		overlayManager.remove(overlay);
+		overlayManager.remove(mascot);
 		if (eventLog != null)
 		{
 			eventLog.close();
@@ -242,6 +251,7 @@ public class RuneAIPlugin extends Plugin
 		else if (state == GameState.LOGIN_SCREEN)
 		{
 			panel.setPlayer(null);
+			lastHolding = null;
 		}
 	}
 
@@ -564,6 +574,7 @@ public class RuneAIPlugin extends Plugin
 		d.put("pose", lp.getPoseAnimation());
 		d.put("graphic", lp.getGraphic());
 		d.put("dmgTaken", damageTakenThisTick);
+		d.put("pnl", sessionPnl);
 
 		final Actor inter = lp.getInteracting();
 		d.put("targetNpcId", inter instanceof NPC ? ((NPC) inter).getId() : -1);
@@ -702,9 +713,86 @@ public class RuneAIPlugin extends Plugin
 		emit("interacting", d);
 	}
 
+	// ================= session P&L =================
+
+	/** P&L pauses while bank / GE / deposit box / shop is open — those are transfers, not gains/losses. */
+	private boolean pnlPaused()
+	{
+		for (int group : new int[]{12, 465, 192, 300})
+		{
+			final net.runelite.api.widgets.Widget w = client.getWidget(group, 0);
+			if (w != null && !w.isHidden())
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private long itemValue(int id)
+	{
+		return id == net.runelite.api.ItemID.COINS_995 ? 1 : itemManager.getItemPrice(id);
+	}
+
+	private void updatePnl()
+	{
+		if (!config.trackPnl())
+		{
+			return;
+		}
+		final Map<Integer, Integer> holding = new java.util.HashMap<>();
+		for (net.runelite.api.InventoryID cid : new net.runelite.api.InventoryID[]{
+			net.runelite.api.InventoryID.INVENTORY, net.runelite.api.InventoryID.EQUIPMENT})
+		{
+			final net.runelite.api.ItemContainer c = client.getItemContainer(cid);
+			if (c == null)
+			{
+				continue;
+			}
+			for (net.runelite.api.Item item : c.getItems())
+			{
+				if (item != null && item.getId() > 0)
+				{
+					holding.merge(item.getId(), item.getQuantity(), Integer::sum);
+				}
+			}
+		}
+
+		if (lastHolding != null && !pnlPaused())
+		{
+			long delta = 0;
+			final Set<Integer> ids = new java.util.HashSet<>(holding.keySet());
+			ids.addAll(lastHolding.keySet());
+			for (int id : ids)
+			{
+				final int diff = holding.getOrDefault(id, 0) - lastHolding.getOrDefault(id, 0);
+				if (diff != 0)
+				{
+					delta += diff * itemValue(id);
+				}
+			}
+			if (delta != 0)
+			{
+				sessionPnl += delta;
+				panel.setPnl(sessionPnl);
+				final Map<String, Object> d = m();
+				d.put("delta", delta);
+				d.put("total", sessionPnl);
+				emit("pnl", d);
+			}
+		}
+		lastHolding = holding;
+	}
+
 	@Subscribe
 	public void onItemContainerChanged(ItemContainerChanged event)
 	{
+		if (event.getContainerId() == net.runelite.api.InventoryID.INVENTORY.getId()
+			|| event.getContainerId() == net.runelite.api.InventoryID.EQUIPMENT.getId())
+		{
+			updatePnl();
+		}
+
 		// gathering with a full inventory -> nudge to bank
 		if (event.getContainerId() == net.runelite.api.InventoryID.INVENTORY.getId()
 			&& event.getItemContainer().count() >= 28)

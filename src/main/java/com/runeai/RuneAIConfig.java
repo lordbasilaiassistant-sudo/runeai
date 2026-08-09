@@ -38,6 +38,26 @@ public interface RuneAIConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "trackPnl",
+		name = "Track session profit/loss",
+		description = "Live gp ledger: loot kept and pickups count up, drops and consumed supplies count down; banking/GE are neutral transfers"
+	)
+	default boolean trackPnl()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "showMascot",
+		name = "Show mascot",
+		description = "Rune, the lip-syncing companion — Alt-drag to move it anywhere"
+	)
+	default boolean showMascot()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "voiceCallouts",
 		name = "Voice callouts",
 		description = "Spoken guidance: idle nudges, eat warnings, bank reminders, loot calls"

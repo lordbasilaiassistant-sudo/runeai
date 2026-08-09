@@ -33,6 +33,7 @@ public class RuneAIPanel extends PluginPanel
 	private final JLabel playersValue = new JLabel("0");
 	private final JLabel eventsValue = new JLabel("0");
 	private final JLabel activityValue = new JLabel("—");
+	private final JLabel pnlValue = new JLabel("0 gp");
 
 	public RuneAIPanel()
 	{
@@ -69,6 +70,7 @@ public class RuneAIPanel extends PluginPanel
 		card.add(row("Game state", stateValue));
 		card.add(row("Player", playerValue));
 		card.add(row("Activity", activityValue));
+		card.add(row("Session P&L", pnlValue));
 		card.add(row("NPCs loaded", npcValue));
 		card.add(row("Players loaded", playersValue));
 		card.add(row("Events logged", eventsValue));
@@ -142,6 +144,15 @@ public class RuneAIPanel extends PluginPanel
 		{
 			playerValue.setText(name == null ? "—" : name);
 			playerValue.setForeground(name == null ? Color.WHITE : OK_GREEN);
+		});
+	}
+
+	public void setPnl(long pnl)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			pnlValue.setText(String.format("%,d gp", pnl));
+			pnlValue.setForeground(pnl > 0 ? OK_GREEN : pnl < 0 ? new Color(255, 90, 90) : Color.WHITE);
 		});
 	}
 
