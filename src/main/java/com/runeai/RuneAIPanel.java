@@ -1,0 +1,150 @@
+package com.runeai;
+
+import java.awt.BasicStroke;
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Font;
+import java.awt.GradientPaint;
+import java.awt.Graphics2D;
+import java.awt.GridLayout;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import javax.swing.BorderFactory;
+import javax.swing.Box;
+import javax.swing.BoxLayout;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.SwingUtilities;
+import net.runelite.client.ui.ColorScheme;
+import net.runelite.client.ui.PluginPanel;
+
+public class RuneAIPanel extends PluginPanel
+{
+	private static final Color ACCENT = new Color(0, 180, 255);
+	private static final Color OK_GREEN = new Color(0, 200, 120);
+
+	private final JLabel stateValue = new JLabel("STARTING");
+	private final JLabel playerValue = new JLabel("—");
+	private final JLabel npcValue = new JLabel("0");
+	private final JLabel playersValue = new JLabel("0");
+	private final JLabel eventsValue = new JLabel("0");
+	private final JLabel activityValue = new JLabel("—");
+
+	public RuneAIPanel()
+	{
+		super();
+		setLayout(new BorderLayout());
+		setBackground(ColorScheme.DARK_GRAY_COLOR);
+		setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+		final JPanel container = new JPanel();
+		container.setLayout(new BoxLayout(container, BoxLayout.Y_AXIS));
+		container.setBackground(ColorScheme.DARK_GRAY_COLOR);
+
+		final JLabel title = new JLabel("RuneAI");
+		title.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 22));
+		title.setForeground(ACCENT);
+		title.setAlignmentX(LEFT_ALIGNMENT);
+
+		final JLabel subtitle = new JLabel("data layer active ✓");
+		subtitle.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
+		subtitle.setForeground(OK_GREEN);
+		subtitle.setAlignmentX(LEFT_ALIGNMENT);
+
+		container.add(title);
+		container.add(subtitle);
+		container.add(Box.createVerticalStrut(12));
+
+		final JPanel card = new JPanel(new GridLayout(0, 1, 0, 6));
+		card.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		card.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(0, 3, 0, 0, ACCENT),
+			BorderFactory.createEmptyBorder(10, 10, 10, 10)));
+		card.setAlignmentX(LEFT_ALIGNMENT);
+
+		card.add(row("Game state", stateValue));
+		card.add(row("Player", playerValue));
+		card.add(row("Activity", activityValue));
+		card.add(row("NPCs loaded", npcValue));
+		card.add(row("Players loaded", playersValue));
+		card.add(row("Events logged", eventsValue));
+
+		container.add(card);
+		container.add(Box.createVerticalStrut(12));
+
+		final JLabel footer = new JLabel("<html>Recording everything →<br>.runelite\\runeai\\</html>");
+		footer.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
+		footer.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		footer.setAlignmentX(LEFT_ALIGNMENT);
+		container.add(footer);
+
+		add(container, BorderLayout.NORTH);
+	}
+
+	private JPanel row(String label, JLabel value)
+	{
+		final JPanel p = new JPanel(new BorderLayout());
+		p.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+
+		final JLabel l = new JLabel(label);
+		l.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
+		l.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+
+		value.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 12));
+		value.setForeground(Color.WHITE);
+
+		p.add(l, BorderLayout.WEST);
+		p.add(value, BorderLayout.EAST);
+		return p;
+	}
+
+	public void setGameState(String state)
+	{
+		SwingUtilities.invokeLater(() -> stateValue.setText(state));
+	}
+
+	public void setPlayer(String name)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			playerValue.setText(name == null ? "—" : name);
+			playerValue.setForeground(name == null ? Color.WHITE : OK_GREEN);
+		});
+	}
+
+	public void setActivity(String activity)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			activityValue.setText(activity);
+			activityValue.setForeground("—".equals(activity) ? Color.WHITE : ACCENT);
+		});
+	}
+
+	public void setCounts(int npcs, int players, long events)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			npcValue.setText(String.valueOf(npcs));
+			playersValue.setText(String.valueOf(players));
+			eventsValue.setText(String.valueOf(events));
+		});
+	}
+
+	static BufferedImage createIcon()
+	{
+		final int s = 16;
+		final BufferedImage img = new BufferedImage(s, s, BufferedImage.TYPE_INT_ARGB);
+		final Graphics2D g = img.createGraphics();
+		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+		g.setPaint(new GradientPaint(0, 0, ACCENT, s, s, new Color(90, 60, 255)));
+		g.fillRoundRect(0, 0, s, s, 6, 6);
+		g.setColor(Color.WHITE);
+		g.setStroke(new BasicStroke(1.6f));
+		g.drawLine(4, 12, 8, 3);
+		g.drawLine(8, 3, 12, 12);
+		g.drawLine(6, 9, 10, 9);
+		g.dispose();
+		return img;
+	}
+}
