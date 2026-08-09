@@ -99,6 +99,12 @@ public class RuneAIPlugin extends Plugin
 	@Inject
 	private net.runelite.client.game.ItemManager itemManager;
 
+	@Inject
+	private net.runelite.client.ui.DrawManager drawManager;
+
+	@Inject
+	private java.util.concurrent.ScheduledExecutorService executor;
+
 	private Gson prettyGson;
 	private RuneAIPanel panel;
 	private NavigationButton navButton;
@@ -125,6 +131,23 @@ public class RuneAIPlugin extends Plugin
 	// ---- session P&L ledger (inventory+equipment deltas at GE value) ----
 	private Map<Integer, Integer> lastHolding;
 	private long sessionPnl;
+
+	// ---- goal inference: gp grind vs xp grind ----
+	private long xpGainedSession;
+	private long gainedValue;
+	private long droppedValue;
+	private int lastDropTick = -1000;
+	private int lastFoodWarnTick = -1000;
+	private int lastDropClickItemId = -1;
+	private int lastDropClickTick = -1000;
+
+	// ---- F2P bond ladder: total worth vs live GE bond price ----
+	private long bankValue = -1; // unknown until the bank is opened once
+	private boolean bondAnnounced;
+
+	// ---- TEMP: auto-screenshot the plugin being useful (for README; remove after) ----
+	private int shotsTaken;
+	private long lastShotMs;
 
 	@Override
 	protected void startUp() throws Exception
@@ -307,6 +330,53 @@ public class RuneAIPlugin extends Plugin
 		damageTakenThisTick = 0;
 	}
 
+	// ================= auto-screenshot (TEMP, for README) =================
+
+	/**
+	 * Capture the client ~0.7s after a useful moment fires, so the tile
+	 * marker pulse, alert banner, and mascot mid-speech are all in frame.
+	 */
+	private void captureUsefulMoment(String trigger)
+	{
+		if (!config.screenshotMode() || shotsTaken >= 8)
+		{
+			return;
+		}
+		final long now = System.currentTimeMillis();
+		if (now - lastShotMs < 15_000)
+		{
+			return;
+		}
+		lastShotMs = now;
+
+		executor.schedule(() -> drawManager.requestNextFrameListener(img ->
+		{
+			try
+			{
+				final java.awt.image.BufferedImage bi = new java.awt.image.BufferedImage(
+					img.getWidth(null), img.getHeight(null), java.awt.image.BufferedImage.TYPE_INT_RGB);
+				final java.awt.Graphics2D g2 = bi.createGraphics();
+				g2.drawImage(img, 0, 0, null);
+				g2.dispose();
+				final File dir = new File(DATA_DIR, "shots");
+				dir.mkdirs();
+				final File f = new File(dir,
+					"shot-" + trigger + "-" + LocalDateTime.now().format(STAMP) + ".png");
+				javax.imageio.ImageIO.write(bi, "png", f);
+				shotsTaken++;
+				log.info("RuneAI screenshot #{} ({}) -> {}", shotsTaken, trigger, f.getAbsolutePath());
+				voice.play("shot");
+				clientThread.invoke(() -> client.addChatMessage(ChatMessageType.GAMEMESSAGE, "",
+					"<col=00b4ff>RuneAI</col> 📸 shot #" + shotsTaken + " (" + trigger
+						+ ") saved — close RuneLite whenever you're happy.", null));
+			}
+			catch (Exception ex)
+			{
+				log.warn("screenshot failed", ex);
+			}
+		}), 700, java.util.concurrent.TimeUnit.MILLISECONDS);
+	}
+
 	// ================= activity guidance =================
 
 	/** What is the user doing? Derived from recent xp drops — free, exact signal. */
@@ -317,6 +387,47 @@ public class RuneAIPlugin extends Plugin
 			return null;
 		}
 		return COMBAT_SKILLS.contains(lastXpSkill) ? "Combat" : lastXpSkill.getName();
+	}
+
+	/**
+	 * Is this session a gp grind or an xp grind? Power-trainers drop most of
+	 * what they gain; bankers keep it. The NN gets this as a per-tick signal.
+	 */
+	private String goalMode()
+	{
+		return gainedValue > 0 && droppedValue * 2 >= gainedValue ? "xp" : "gp";
+	}
+
+	/** Count inventory items that carry a given action, e.g. "Eat" or "Drink". */
+	private int countInventoryAction(String action)
+	{
+		final net.runelite.api.ItemContainer inv =
+			client.getItemContainer(net.runelite.api.InventoryID.INVENTORY);
+		if (inv == null)
+		{
+			return 0;
+		}
+		int count = 0;
+		for (net.runelite.api.Item item : inv.getItems())
+		{
+			if (item == null || item.getId() <= 0)
+			{
+				continue;
+			}
+			final String[] actions = client.getItemDefinition(item.getId()).getInventoryActions();
+			if (actions != null)
+			{
+				for (String a : actions)
+				{
+					if (action.equals(a))
+					{
+						count++;
+						break;
+					}
+				}
+			}
+		}
+		return count;
 	}
 
 	private void updateGuidance(Player lp)
@@ -344,13 +455,39 @@ public class RuneAIPlugin extends Plugin
 			final int max = Math.max(1, client.getRealSkillLevel(Skill.HITPOINTS));
 			if (underAttack && hp * 100 / max <= config.lowHpPercent())
 			{
-				overlay.setAlert("EAT — HP " + hp + "/" + max, tick + 2);
-				voice.play("eat");
+				if (countInventoryAction("Eat") > 0)
+				{
+					overlay.setAlert("EAT — HP " + hp + "/" + max, tick + 2);
+					voice.play("eat");
+				}
+				else if (tick - lastFoodWarnTick >= 100)
+				{
+					// low, under attack, and NOTHING edible left — that's the real emergency
+					lastFoodWarnTick = tick;
+					overlay.setAlert("NO FOOD — get out / bank", tick + 5);
+					voice.play("bank");
+				}
+				captureUsefulMoment("eat-alert");
 			}
 		}
 
 		final String activity = currentActivity();
-		panel.setActivity(activity == null ? "—" : activity);
+		panel.setActivity(activity == null ? "—" : activity + " · " + goalMode());
+
+		// F2P bond ladder: check every ~30s
+		if (tick % 50 == 0)
+		{
+			final boolean members = client.getWorldType().contains(net.runelite.api.WorldType.MEMBERS);
+			final long bondPrice = itemManager.getItemPrice(net.runelite.api.ItemID.OLD_SCHOOL_BOND);
+			final long worth = totalWorth();
+			panel.setBond(members, worth, bondPrice, bankValue >= 0);
+			if (!members && !bondAnnounced && bankValue >= 0 && bondPrice > 0 && worth >= bondPrice)
+			{
+				bondAnnounced = true;
+				overlay.setAlert("You can afford a BOND — go members!", tick + 10);
+				voice.play("bond");
+			}
+		}
 
 		// fighting unpotted with a boost potion in the bag -> pot up
 		if (config.potReminder() && "Combat".equals(activity) && tick - lastPotRemindTick >= 100)
@@ -382,6 +519,7 @@ public class RuneAIPlugin extends Plugin
 				overlay.flashTile((WorldPoint) target[0], RuneAIOverlay.GUIDE,
 					"Click: " + target[1], tick + 6);
 				voice.play("idle");
+				captureUsefulMoment("guidance");
 			}
 		}
 	}
@@ -436,6 +574,7 @@ public class RuneAIPlugin extends Plugin
 				lastPotRemindTick = tick;
 				overlay.setAlert("Pot up — " + name, tick + 5);
 				voice.play("pot");
+				captureUsefulMoment("pot-up");
 				return;
 			}
 		}
@@ -575,6 +714,27 @@ public class RuneAIPlugin extends Plugin
 		d.put("graphic", lp.getGraphic());
 		d.put("dmgTaken", damageTakenThisTick);
 		d.put("pnl", sessionPnl);
+		d.put("activity", currentActivity());
+		d.put("goal", goalMode());
+		d.put("xpGained", xpGainedSession);
+		d.put("members", client.getWorldType().contains(net.runelite.api.WorldType.MEMBERS));
+		d.put("worth", totalWorth());
+
+		// worn gear ids — lets models correlate equipment with outcomes (BiS learning)
+		final net.runelite.api.ItemContainer equip =
+			client.getItemContainer(net.runelite.api.InventoryID.EQUIPMENT);
+		final List<Integer> gear = new ArrayList<>();
+		if (equip != null)
+		{
+			for (net.runelite.api.Item item : equip.getItems())
+			{
+				if (item != null && item.getId() > 0)
+				{
+					gear.add(item.getId());
+				}
+			}
+		}
+		d.put("equip", gear);
 
 		final Actor inter = lp.getInteracting();
 		d.put("targetNpcId", inter instanceof NPC ? ((NPC) inter).getId() : -1);
@@ -620,6 +780,7 @@ public class RuneAIPlugin extends Plugin
 		{
 			lastXpSkill = event.getSkill();
 			lastXpTick = client.getTickCount();
+			xpGainedSession += event.getXp() - prev;
 		}
 
 		final Map<String, Object> d = m();
@@ -774,6 +935,10 @@ public class RuneAIPlugin extends Plugin
 			if (delta != 0)
 			{
 				sessionPnl += delta;
+				if (delta > 0)
+				{
+					gainedValue += delta;
+				}
 				panel.setPnl(sessionPnl);
 				final Map<String, Object> d = m();
 				d.put("delta", delta);
@@ -784,6 +949,20 @@ public class RuneAIPlugin extends Plugin
 		lastHolding = holding;
 	}
 
+	/** Everything we can see, valued at GE prices: carried + last-seen bank. */
+	private long totalWorth()
+	{
+		long worth = Math.max(0, bankValue);
+		if (lastHolding != null)
+		{
+			for (Map.Entry<Integer, Integer> e : lastHolding.entrySet())
+			{
+				worth += e.getValue() * itemValue(e.getKey());
+			}
+		}
+		return worth;
+	}
+
 	@Subscribe
 	public void onItemContainerChanged(ItemContainerChanged event)
 	{
@@ -792,13 +971,29 @@ public class RuneAIPlugin extends Plugin
 		{
 			updatePnl();
 		}
+		else if (event.getContainerId() == net.runelite.api.InventoryID.BANK.getId())
+		{
+			// bank open recalibrates total worth — members items count, F2P can still SELL them on GE
+			long v = 0;
+			for (net.runelite.api.Item item : event.getItemContainer().getItems())
+			{
+				if (item != null && item.getId() > 0)
+				{
+					v += (long) item.getQuantity() * itemValue(item.getId());
+				}
+			}
+			bankValue = v;
+		}
 
-		// gathering with a full inventory -> nudge to bank
+		// full inventory only means "bank" for a BANKING gatherer:
+		// combat keeps going (food/pots free slots), power-trainers drop instead
 		if (event.getContainerId() == net.runelite.api.InventoryID.INVENTORY.getId()
 			&& event.getItemContainer().count() >= 28)
 		{
 			final String act = currentActivity();
-			if (act != null && !"Combat".equals(act))
+			if (act != null && !"Combat".equals(act)
+				&& !"xp".equals(goalMode())
+				&& client.getTickCount() - lastDropTick > 150)
 			{
 				overlay.setAlert("Inventory full — bank it", client.getTickCount() + 8);
 				voice.play("bank");
@@ -814,6 +1009,12 @@ public class RuneAIPlugin extends Plugin
 	@Subscribe
 	public void onMenuOptionClicked(MenuOptionClicked event)
 	{
+		if ("Drop".equals(event.getMenuOption()))
+		{
+			lastDropClickItemId = event.getId();
+			lastDropClickTick = client.getTickCount();
+		}
+
 		final Map<String, Object> d = m();
 		d.put("option", event.getMenuOption());
 		d.put("target", event.getMenuTarget());
@@ -856,12 +1057,23 @@ public class RuneAIPlugin extends Plugin
 		if (lp != null && lp.getWorldLocation().distanceTo(wp) <= 8)
 		{
 			final int value = itemManager.getItemPrice(event.getItem().getId()) * event.getItem().getQuantity();
-			if (value >= config.minLootValue())
+
+			// spawned right after we clicked Drop on this item id -> OUR drop:
+			// feeds the xp-vs-gp goal signal instead of flashing as loot
+			final boolean ourDrop = event.getItem().getId() == lastDropClickItemId
+				&& client.getTickCount() - lastDropClickTick <= 3;
+			if (ourDrop)
+			{
+				droppedValue += value;
+				lastDropTick = client.getTickCount();
+			}
+			else if (value >= config.minLootValue())
 			{
 				final String name = client.getItemDefinition(event.getItem().getId()).getName();
 				overlay.flashTile(wp, RuneAIOverlay.LOOT, name + " · " + value + " gp",
 					client.getTickCount() + 12);
 				voice.play("loot");
+				captureUsefulMoment("loot");
 			}
 		}
 

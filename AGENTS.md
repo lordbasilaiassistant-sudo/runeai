@@ -1,163 +1,224 @@
-# RuneLite Plugin Development — Agent Guidelines
+# AGENTS.md — RuneAI contributor & agent guide
 
-## Logging
+Last updated: 2026-08-09
 
-- Use `log.debug()` for developer/diagnostic logging.
-- Do not use `log.info` for per-frame or per-event logging - RuneLite runs at INFO level in production, so high-frequency info logs will pollute user logs. `log.info()` is fine for one-time startup/shutdown messages or infrequent events.
+This is the canonical guidance file for anyone (human or AI agent) working in this repo.
+`CLAUDE.md` is a pointer to this file. Read this before editing code.
 
-## Threading & Concurrency
-
-- Never use `Thread.sleep()`.
-- Never block on `shutDown()` or `startUp()` — don't call `executor.awaitTermination()` in shutdown, just use `shutdownNow()`.
-- Never do blocking network IO or disk IO on the client thread. The OkHttp thread pool can be used for blocking network requests.
-  If you need to call back into `client` from the okhttp threadpool, such as from the response queued with `enqueue()`, use `clientThread.invoke()`
-- Explicitly cancel scheduled tasks (e.g. `ScheduledFuture`) on shutdown, in addition to shutting down the executor.
-- For batching async work, use `CompletableFuture.allOf()` — not `CountDownLatch`.
-- If you must use `Process.waitFor()`, always pass a reasonable timeout.
-
-## Performance
-
-- Don't scan the entire scene every tick or frame. Use events such as object and npc (de)spawn to track what you care about and maintain your own collection.
-- Keep the computations in Overlays, which are run each frame, to a minimum.
-
-## API Usage
-
-- Use `net.runelite.api.gameval` package constants — `ItemID`, `InterfaceID`, `ObjectID`, etc. Never hardcode magic numbers when gameval constants can be used instead.
-- Use `LinkBrowser` to open URLs, not `java.awt.Desktop`
-- When looking up Widgets, pass the component ID from gamevals (eg `client.getWidget(InterfaceID.DomEndLevelUi.LOOT_VALUE)`) - do not manually combine interface + component child IDs.
-- Use of Java reflection is forbidden.
-
-## HTTP & JSON
-
-- Use OkHttp for all HTTP requests. `@Inject OkHttpClient` to get the HTTP client. Do not use `HttpURLConnection`, `java.net.http.HttpClient`, or Apache HttpClient.
-- Use `@Inject Gson` to get a Gson instead, never create your own from scratch. You can use `.newBuilder()` to create one derived from the base `Gson.`
-- Do not add transitive dependencies from `runelite-client` directly to `build.gradle`, such as gson, guice, or okhttp.
-- Never execute okhttp calls on the client thread. Prefer using `enqueue()` which places the request on the okhttp threadpool.
-
-## File I/O
-
-- Only read/write files inside the `.runelite` directory. Create a subdirectory for your plugin (e.g. `.runelite/your-plugin-name/`) if you need to store data on disk.
-- Use `RuneLite.RUNELITE_DIR` to get the path.
-- Alternatively, use `JFileChooser` for user-initiated file operations.
-
-## Config
-
-- Config group names must be specific — e.g. `"deadman-prices"`, not `"deadman"`.
-- Never rename a config key or config group without providing a migration. Renaming silently resets users' saved settings.
-- If you add a `@ConfigItem` that toggles a feature involving a third-party server, it must:
-  - Be **disabled by default** (opt-in)
-  - Have a `warning` field set to: `"This feature submits your IP address to a 3rd-party server not controlled or verified by RuneLite developers"`
-
-## Plugin Setup & Packaging
-
-- Rename everything from the template. Do not leave `com.example`, `ExamplePlugin`, `ExampleConfig`, or `example` as the config group. Rename the package path, class names, config group, `build.gradle` group, `settings.gradle` project name, and `runelite-plugin.properties`.
-- Do not include a `META-INF/services/net.runelite.client.plugins.Plugin` file.
-- Do not commit build artifacts — no `.class` files, `out/` directories, or `.tmp` directories.
-- `build.gradle` must target Java 11** and match the structure of the example-plugin template.
-- Retain a permissive license, such as BSD-2.
-
-## Resources & Assets
-
-- Optimize icon PNGs. Java loads images at full resolution in memory (`width × height × 4` bytes), so a seemingly small file can use significant memory.
-- Ensure PNGs are actually PNGs — do not rename JPEGs or ICOs to `.png`.
-
-## Cleanup
-
-- Remove unused config classes, fields, and imports.
-- Clean up subscriptions, listeners, and overlays in `shutDown()`.
-- Do not mix code reformatting with feature changes in the same commit — it makes diffs unreadable for reviewers.
-
-## Testing
-
-You cannot verify plugin behavior yourself. Even if you have screen-capture or computer-use tools available, **do not use them to interact with RuneScape** — automating game input violates Jagex's third-party client guidelines and will get the user's account banned. Only the user can confirm a plugin works in-game.
-
-After completing a task, do not declare it done. Instead:
-
-1. Offer to launch RuneLite for the user by running `./gradlew run` from the plugin's root directory.
-2. Instruct the user to follow the "Using Jagex Accounts" instructions found at https://github.com/runelite/runelite/wiki/Using-Jagex-Accounts to login to the development client.
-3. Tell the user *what to test* — the specific behavior you changed, the golden path, and any edge cases worth exercising.
-4. Wait for the user to confirm the feature works in-game before considering the task complete. A clean JVM start is not a passing test.
+Repo: `https://github.com/lordbasilaiassistant-sudo/runeai`
+Package: `com.runeai` · Gradle project name: `runeai` · Java release target: **11**
 
 ---
 
-# Plugin Rules & Restrictions
+## 1. What RuneAI is (and is not)
 
-Features that are **forbidden or restricted** in RuneLite hub plugins.
-Sourced from [Jagex's Third-Party Client Guidelines](https://secure.runescape.com/m=news/third-party-client-guidelines?oldschool=1) and RuneLite's [Rejected or Rolled-Back Features](https://github.com/runelite/runelite/wiki/Rejected-or-Rolled-Back-Features).
+RuneAI is a **RuneLite plugin** for **Old School RuneScape (OSRS)**: an AI buddy / coach that watches
+game state and helps the player click the right thing at the right time, stay alive, and keep profits up.
 
-**If your plugin does any of the things listed below, it will be rejected.**
+- It is **not a bot**. It does not play the game, does not inject input, does not click for the player.
+- Everything it does is **read game state → draw an overlay, speak a line, or update the sidebar panel**.
+- The human always makes every click.
 
-## Forbidden Language Features
+The product line to keep true in code and docs: *"a buddy, not a bot."* Any feature proposal that
+performs an action on the player's behalf is out of scope and must be rejected, not implemented.
 
-- All code must be Java 11 compatible
-- No use of reflection
-- No use of JNI or JNA
-- No direct access to native memory access via Unsafe or LWJGL
-- No executing external processes, including with Process or ProcessBuilder
-- No downloading or dynamic loading of code, including classloading
-- No runtime generation of code
-- No use of Java (de)serialization
+Current status: runs from source (`./gradlew run`). **Not on the RuneLite Plugin Hub.**
+Support link shipped in the sidebar panel: `https://ko-fi.com/broketobuilt`.
 
-## Boss & Combat Restrictions
+---
 
-Applies to all bosses, Raids sub-bosses, Slayer bosses, Demi-bosses, and wave-based minigames (Fight Caves, Inferno, etc.):
+## 2. Architecture map
 
-- No next-attack prediction (timing or attack style)
-- No projectile target/landing indicators
-- No prayer switching indicators
-- No attack counters
-- No automatic indicators showing where to stand or not stand (manual tile marking is allowed)
-- No additional visual or audio indicators of a boss mechanic, unless it is a manually triggered external helper
-- No advance warning of future hazards (highlighting currently active hazards is OK)
-- No "flinch" timing helpers
-- No combat prayer recommendations
-- No NPC focus identification (which player the NPC is targeting)
-- No content simulation (e.g. boss fight simulators)
+All source lives in `src/main/java/com/runeai/`.
 
-New high-end PvM boss plugins are not accepted as a blanket policy.
+| File | Responsibility (one line) |
+| --- | --- |
+| `RuneAIPlugin.java` | The plugin entry point and **the only place triggers live** — event subscriptions, activity detection, guidance rules, P&L ledger, data recording. |
+| `RuneAIConfig.java` | `@ConfigGroup("runeai")` config interface — every user-facing toggle and threshold. |
+| `RuneAIOverlay.java` | Draw-only game-view overlay: NPC outlines, animated tile flashes with bobbing arrow, top-center alert banner. Exposes `flashTile()` / `setAlert()`. |
+| `MascotOverlay.java` | Draw-only mascot "Rune" — a movable wisp that bobs, blinks, lip-syncs to live audio amplitude, and shows a speech bubble. |
+| `VoicePlayer.java` | Loads a bundled WAV from resources, plays it on a daemon thread, computes an amplitude envelope, exposes `getMouth()` (0..1) and `getSpeakingText()` for the mascot. Per-key 12s cooldown. |
+| `RuneAIPanel.java` | RuneLite sidebar `PluginPanel` — game state, player, activity (+ gp/xp goal), session P&L, bond fund, NPC/player/event counts, and the Ko-fi button. |
+| `GameStateSnapshot.java` | Static one-shot capture of the whole client state into a `Map` for a JSON dump. **Client thread only.** |
+| `EventLog.java` | Append-only JSONL writer (`{"t":iso,"tick":n,"e":type,...}`), flushes every 50 lines. |
+| `src/test/java/com/runeai/RuneAIPluginTest.java` | Dev launcher — `ExternalPluginManager.loadBuiltin(RuneAIPlugin.class)` then `RuneLite.main(args)`. This is `./gradlew run`'s main class. |
+| `train/train_damage_model.py` | Numpy logistic regression over recorded tick vectors → `train/damage_model.json` (P(damage within 3 ticks)). Not yet wired into the plugin. |
+| `runelite-plugin.properties` | Hub manifest (displayName, version, `plugins=com.runeai.RuneAIPlugin`). |
 
-## PvP Restrictions
+### Data flow
 
-- No removing or deprioritising attack/cast options in PvP
-- No opponent freeze duration indicators
-- No PvP clan opponent identification
-- No PvP loot drop previews
-- No identifying an opponent's opponent
-- No PvP target scouting information
-- No player group summaries (attackable counts, prayer usage, etc.)
-- No level-based PvP player indicators (highlighting attackable players or those within level range)
-- No spell targeting simplification (removing menu options to make targeting easier)
+```
+RuneLite events ──> RuneAIPlugin (@Subscribe handlers)
+                       ├─> EventLog        -> ~/.runelite/runeai/events-*.jsonl
+                       ├─> tick vectors    -> ~/.runelite/runeai/ticks-*.jsonl
+                       ├─> GameStateSnapshot -> ~/.runelite/runeai/snapshot-*.json (once per login, ~8 ticks after)
+                       ├─> DrawManager frame  -> ~/.runelite/runeai/shots/*.png (TEMP screenshotMode, max 8)
+                       ├─> RuneAIOverlay.flashTile()/setAlert()   (draw)
+                       ├─> VoicePlayer.play(key)                  (speak)  -> MascotOverlay lip-sync
+                       └─> RuneAIPanel.setX()                     (sidebar)
+```
 
-## Menu Restrictions
+### Feature-to-code index
 
-- No adding new menu entries that cause actions to be sent to the server
-- No menu modifications for Construction
-- No menu modifications for Blackjacking
-- No conditional menu entry removal based on NPC type, friend status, etc. (can be overpowered)
+- **Activity detection** — `RuneAIPlugin.currentActivity()`, derived from the most recent real XP gain
+  (`onStatChanged`), stale after 50 ticks. Combat skills collapse to `"Combat"`.
+- **Idle click guidance** — `updateGuidance()` + `findNearestClickable()`; NPC-based for Fishing/Combat,
+  scene-scan by object-name keyword for Mining/Woodcutting/Cooking/Smithing/Crafting.
+- **Low HP / EAT alert** — `updateGuidance()`, gated on `lowHpWarn()` + `lowHpPercent()`. Branches on
+  `countInventoryAction("Eat")`: food present → `EAT — HP x/y` + `eat` voice; nothing edible →
+  `NO FOOD — get out / bank` + `bank` voice, throttled by `lastFoodWarnTick` to every 100 ticks.
+- **Potion reminder** — `checkPotions()`, inventory name-match, fires only when the boosted level is not
+  already above the real level, throttled to every 100 ticks.
+- **Loot flash** — `onItemSpawned()`, within 8 tiles, GE value ≥ `minLootValue()`, and **not** our own drop
+  (`lastDropClickItemId` set by a `Drop` menu click within the last 3 ticks).
+- **Goal inference** — `goalMode()` returns `"xp"` once `droppedValue * 2 >= gainedValue` (with
+  `gainedValue > 0`), else `"gp"`. `gainedValue` accrues positive P&L deltas; `droppedValue` accrues
+  self-dropped item value in `onItemSpawned()`. Written per tick as `goal`; shown after the activity in the
+  panel.
+- **Bank nudge** — `onItemContainerChanged()` when inventory count ≥ 28, the activity is non-combat, the
+  goal is not `"xp"`, and it has been >150 ticks since our last drop.
+- **Bond ladder** — `updateGuidance()` on `tick % 50 == 0`: `totalWorth()` (last-seen `bankValue` +
+  inventory/equipment at GE price) vs `ItemID.OLD_SCHOOL_BOND`; `panel.setBond(...)` every check, one-shot
+  alert + `bond` voice guarded by `bondAnnounced`. `bankValue` is refreshed on `BANK` container changes.
+- **Session P&L** — `updatePnl()`: inventory + equipment quantity deltas priced at GE value
+  (coins count as 1 gp each). `pnlPaused()` suppresses the ledger while widget groups
+  12 / 465 / 192 / 300 (bank, GE, deposit box, shop) are open, because those are transfers, not profit.
+  `GameState.LOGIN_SCREEN` clears `lastHolding` only — `sessionPnl` is not reset.
+- **Auto-screenshot (TEMP)** — `captureUsefulMoment(trigger)` behind `screenshotMode()`; `executor.schedule`
+  + `drawManager.requestNextFrameListener` at 700 ms, PNG into `DATA_DIR/shots`, max 8 per session, 15 s
+  apart. Marked for removal — do not build on it.
+- **Voice** — `VoicePlayer.LINES` is the source of truth for the eight keys and their text:
+  `idle`, `eat`, `bank`, `loot`, `attacked`, `pot`, `shot`, `bond`.
 
-## Interface Restrictions
+---
 
-- No unhiding hidden interface components (special attack bar, minimap)
-- No moving or resizing click zones for 3D components
-- No moving or resizing click zones for combat options, inventory, equipment, or spellbook
-- No resizing prayer book click zones
-- No resizing spellbook components
-- No removing inventory pane background or making it click-through
-- No detached camera world interaction (interacting with the game world from a camera position that isn't the player's)
+## 3. Dev loop
 
-## Input Restrictions
+From the repo root, `C:/Users/drlor/OneDrive/Desktop/RuneAIPlugin`:
 
-- No injecting input events, including mouse and keyboard events
-- No autotyping — plugins must not programmatically insert text into the chatbox input (includes pasting, shorthand expansion)
-- No modifying outgoing chat messages after the user sends them
+```bash
+./gradlew compileTestJava     # fast correctness check — run this after every edit
+./gradlew run                 # launch RuneLite dev client with RuneAI loaded
+```
 
-## Data & Privacy Restrictions
+`./gradlew run` executes `com.runeai.RuneAIPluginTest` with `--developer-mode --debug`.
 
-- No exposing player information over HTTP
-- No crowdsourcing data about other players (locations, gear, names, etc.)
-- No credential manager plugins that stores account credentials
+**Kill the previous client before relaunching.** A running `RuneAIPluginTest` JVM holds the Gradle
+build outputs and the plugin will not reload; `./gradlew run` will either fail to write classes or you
+will be looking at stale code. On Windows:
 
-## Content Restrictions
+```powershell
+Get-Process java -ErrorAction SilentlyContinue |
+  Where-Object { $_.CommandLine -like '*RuneAIPluginTest*' } |
+  Stop-Process -Force
+```
 
-- No adult or overtly sexual content
-- No plugins that use player-provided IDs for their entire functionality (causes moderation issues)
+Or close the RuneLite window before rebuilding. Then `./gradlew run` again.
+
+To log in to the dev client with a Jagex account, follow
+`https://github.com/runelite/runelite/wiki/Using-Jagex-Accounts`.
+
+**Only the user can confirm in-game behavior.** Do not use screen capture or computer-use tools to
+interact with RuneScape — automating game input violates Jagex's third-party client guidelines and
+risks the account. After a change: state what to test, offer to launch, and wait for the user's
+confirmation. A clean JVM start is not a passing test.
+
+Training the danger model on locally recorded ticks:
+
+```bash
+py train/train_damage_model.py   # reads ~/.runelite/runeai/ticks-*.jsonl, writes train/damage_model.json
+```
+
+(`py`, not `python`, on this machine. Needs 500+ recorded ticks or it exits early.)
+
+---
+
+## 4. Conventions
+
+### Client thread
+
+- Every `net.runelite.api.Client` call must run on the client thread. `@Subscribe` handlers and
+  `Overlay.render()` already are; anything else needs `clientThread.invoke()`.
+- `GameStateSnapshot.capture(client)` is client-thread-only — it walks the whole 104×104 scene.
+- Swing/panel updates go the other way: `RuneAIPanel` wraps every setter in `SwingUtilities.invokeLater`.
+  Keep it that way when adding fields.
+- Never do blocking network or disk IO on the client thread. `VoicePlayer` deliberately plays on its own
+  daemon thread (`runeai-voice`) and never touches `Client`.
+
+### Overlays are draw-only
+
+`RuneAIOverlay` and `MascotOverlay` render what they are told and nothing more. They must not decide
+*when* something should be highlighted or spoken.
+
+**All triggers live in `RuneAIPlugin`.** A new coaching behavior is: detect the condition in a
+`@Subscribe` handler or in `updateGuidance()`, then call `overlay.flashTile(...)`, `overlay.setAlert(...)`,
+`voice.play(key)`, or `panel.setX(...)`. If you find yourself adding game logic inside a `render()`
+method, move it. `render()` runs every frame — keep the work in there minimal.
+
+### Config
+
+- Group name is `runeai`. **Never rename an existing `keyName` or the group** without a migration —
+  renaming silently resets users' saved settings.
+- Every new coaching feature ships with a `@ConfigItem` toggle, defaulted to whatever is sane, and the
+  code path checks it before doing anything.
+
+### Voice lines
+
+Clips are bundled resources: `src/main/resources/com/runeai/voice/<key>.wav`, loaded by
+`VoicePlayer.speak()` at `/com/runeai/voice/<key>.wav`. Current keys: `idle`, `eat`, `bank`, `loot`,
+`attacked`, `pot`, `shot`, `bond`. All eight shipped files are mono 16-bit PCM at 24 kHz.
+
+To add or change a line:
+
+1. Add/edit the entry in `VoicePlayer.LINES` (the map is both the caption shown in the mascot's speech
+   bubble and the text to synthesize).
+2. Regenerate the WAV locally with **Kokoro TTS via `kokoro-js`, voice `af_heart`**, written as
+   **16-bit PCM WAV** (mono). The envelope code in `VoicePlayer.speak()` reads signed 16-bit
+   little-endian frames — any other sample format breaks lip-sync.
+3. Save it as `src/main/resources/com/runeai/voice/<key>.wav` with the filename exactly matching the key
+   passed to `voice.play(key)`.
+4. `./gradlew compileTestJava && ./gradlew run` and listen to it in the dev client.
+
+Voice is 100% local. There is no TTS network call at runtime and no audio is uploaded anywhere.
+
+### RuneLite API hygiene
+
+- Use `net.runelite.api.gameval` constants (`ItemID`, `InterfaceID`, `ObjectID`) instead of magic numbers
+  where they exist. The hardcoded P&L widget groups in `pnlPaused()` are a known debt — replace them with
+  gameval `InterfaceID` constants rather than adding more raw ints.
+- `LinkBrowser.browse(...)` for URLs, never `java.awt.Desktop` (see the Ko-fi button).
+- `@Inject Gson` / `@Inject OkHttpClient` — never construct your own; do not add RuneLite's transitive
+  deps to `build.gradle`.
+- No reflection, no JNI/JNA, no `ProcessBuilder`, no dynamic classloading, no Java serialization —
+  all are forbidden in hub plugins and all are avoidable here.
+- File IO stays inside `RuneLite.RUNELITE_DIR`; RuneAI uses `~/.runelite/runeai/` exclusively.
+- `log.debug()` for per-tick/per-event diagnostics. `log.info()` only for startup/shutdown or rare events.
+- Clean up in `shutDown()`: remove the nav button, remove both overlays, close both `EventLog`s.
+  Anything you add in `startUp()` must be undone there.
+
+### Jagex third-party client limits worth remembering
+
+Even though RuneAI is not on the hub yet, keep it hub-eligible: no next-attack prediction, no prayer
+switch indicators, no projectile landing indicators, no attack counters, no "stand here" boss
+indicators, no input injection, no autotyping, no menu entries that send actions to the server, and no
+crowdsourcing of other players' data.
+
+---
+
+## 5. Hard rules
+
+1. **Never commit recorded game data.** `~/.runelite/runeai/*.jsonl`, `snapshot-*.json`, and
+   `train/damage_model.json` are local-only — they contain account names and play history. `.gitignore`
+   already covers `*.jsonl`, `snapshot-*.json`, and `train/damage_model.json`; do not weaken it, and do
+   not copy recordings into the repo tree "just for a test."
+2. **Recordings stay on the player's machine.** No upload endpoint, no telemetry, no third-party server.
+   Any config item that would send data off-machine must be opt-in, off by default, and carry the
+   RuneLite third-party-server warning string.
+3. **Never auto-submit to the RuneLite Plugin Hub.** No PR to `runelite/plugin-hub`, no release tag
+   intended as a hub submission, without Anthony explicitly asking for it in that session.
+4. **Never make RuneAI act for the player.** No input injection, no automated clicking, no menu actions
+   sent to the server. Buddy, not bot.
+5. **Do not commit build artifacts** (`build/`, `.class` files) and do not add a
+   `META-INF/services/net.runelite.client.plugins.Plugin` file.
+6. **Do not claim a feature works from the code alone.** Compiling is not testing; a launched JVM is not
+   a passing test. Only an in-game confirmation counts.

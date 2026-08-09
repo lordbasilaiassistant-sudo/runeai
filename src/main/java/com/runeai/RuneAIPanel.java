@@ -34,6 +34,7 @@ public class RuneAIPanel extends PluginPanel
 	private final JLabel eventsValue = new JLabel("0");
 	private final JLabel activityValue = new JLabel("—");
 	private final JLabel pnlValue = new JLabel("0 gp");
+	private final JLabel bondValue = new JLabel("—");
 
 	public RuneAIPanel()
 	{
@@ -71,6 +72,7 @@ public class RuneAIPanel extends PluginPanel
 		card.add(row("Player", playerValue));
 		card.add(row("Activity", activityValue));
 		card.add(row("Session P&L", pnlValue));
+		card.add(row("Bond fund", bondValue));
 		card.add(row("NPCs loaded", npcValue));
 		card.add(row("Players loaded", playersValue));
 		card.add(row("Events logged", eventsValue));
@@ -153,6 +155,30 @@ public class RuneAIPanel extends PluginPanel
 		{
 			pnlValue.setText(String.format("%,d gp", pnl));
 			pnlValue.setForeground(pnl > 0 ? OK_GREEN : pnl < 0 ? new Color(255, 90, 90) : Color.WHITE);
+		});
+	}
+
+	public void setBond(boolean members, long worth, long bondPrice, boolean bankKnown)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			if (members)
+			{
+				bondValue.setText("members ✓");
+				bondValue.setForeground(OK_GREEN);
+				return;
+			}
+			if (bondPrice <= 0)
+			{
+				bondValue.setText("—");
+				return;
+			}
+			final int pct = (int) Math.min(100, worth * 100 / bondPrice);
+			bondValue.setText(String.format("%d%%%s of %,dk", pct, bankKnown ? "" : "*", bondPrice / 1000));
+			bondValue.setToolTipText(bankKnown
+				? String.format("Total worth %,d gp vs bond %,d gp", worth, bondPrice)
+				: "Open your bank once to count everything you own");
+			bondValue.setForeground(pct >= 100 ? OK_GREEN : ACCENT);
 		});
 	}
 
