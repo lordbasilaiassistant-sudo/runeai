@@ -7,3 +7,7 @@ build
 nbactions.xml
 nb-configuration.xml
 nbproject/
+# recorded game data must never go public (contains account names)
+*.jsonl
+snapshot-*.json
+train/damage_model.json
