@@ -293,6 +293,7 @@ public class RuneAIPlugin extends Plugin
 		loadTrader();
 		loadClog();
 		loadOfferState();
+		loadBookedOffers();
 		chatCommandManager.registerCommandAsync("!profit", (msg, txt) ->
 		{
 			msg.getMessageNode().setValue(String.format(
@@ -590,6 +591,11 @@ public class RuneAIPlugin extends Plugin
 				{
 					sessionFills++; // carryover offers belong to the session that placed them
 				}
+				// one row per finished offer, matching how the game's own history
+				// reports it. Only offers we watched from placement are booked: an
+				// offer that completed while the client was closed re-fires as
+				// BOUGHT on login, and booking that would invent a second trade
+				bookOffer(o.getItemId(), o.getQuantitySold(), o.getPrice(), buying);
 			}
 			if (sug)
 			{
@@ -606,6 +612,12 @@ public class RuneAIPlugin extends Plugin
 			if (sug)
 			{
 				sugCancels++; // our call stalled long enough that they pulled it
+			}
+			if (tr != null && tr.itemId == o.getItemId())
+			{
+				// a pulled offer that filled partly is still a trade the game
+				// recorded, so the audit has to know about it
+				bookOffer(o.getItemId(), o.getQuantitySold(), o.getPrice(), buying);
 			}
 			itemMemory.recordStall(o.getItemId(), lane); // it stopped working — learn that
 			offerTracks[slot] = null;
@@ -655,6 +667,16 @@ public class RuneAIPlugin extends Plugin
 			petTile = lastPos; // step into the tile the player just left
 			mascot.setPetTiles(petPrevTile, petTile, System.currentTimeMillis());
 		}
+
+		// the ledger's pause marker has to be kept fresh every tick, not only when
+		// an inventory change happens to ask: a trade window can open and close
+		// with no container event of its own, and then the settlement lands with
+		// nothing remembering that a transfer just happened
+		if (transferUiOpen())
+		{
+			lastTransferUiTick = client.getTickCount();
+		}
+		readTradeHistoryIfDue();
 
 		flipService.maybeRefresh();
 		if (client.getTickCount() % 10 == 0)
@@ -901,6 +923,193 @@ public class RuneAIPlugin extends Plugin
 			spent += qty * buyAt;
 		}
 		return out;
+	}
+
+	// ================= GE trade history audit =================
+
+	/**
+	 * Offers we completed, at the granularity the game's own history uses: one
+	 * row per finished offer, not per partial fill. Kept so the interface has
+	 * something to be diffed against.
+	 */
+	private final List<TradeHistory.Entry> bookedOffers = new ArrayList<>();
+	private static final int BOOKED_KEEP = 40;
+	private int historyReadTick = -1;
+	private boolean historyRetried;
+	private boolean historyRawLogged;
+
+	@Subscribe
+	public void onWidgetLoaded(net.runelite.api.events.WidgetLoaded event)
+	{
+		if (event.getGroupId() == net.runelite.api.gameval.InterfaceID.GE_HISTORY
+			&& config.tradeAudit())
+		{
+			// the interface loads empty and a script fills it, so read a couple of
+			// ticks later rather than racing the thing we came to measure
+			historyReadTick = client.getTickCount() + 2;
+			historyRetried = false;
+		}
+	}
+
+	/**
+	 * Let the game audit our ledger. Read-only: these widgets are on screen
+	 * because the player opened them, and nothing here sends anything anywhere.
+	 */
+	private void readTradeHistoryIfDue()
+	{
+		if (historyReadTick < 0 || client.getTickCount() < historyReadTick)
+		{
+			return;
+		}
+		historyReadTick = -1;
+		final List<TradeHistory.Row> rows = TradeHistory.read(client);
+		if (rows.isEmpty() && !historyRetried && TradeHistory.isOpen(client))
+		{
+			historyRetried = true; // the script may still be building the list
+			historyReadTick = client.getTickCount() + 6;
+			return;
+		}
+		if (rows.isEmpty())
+		{
+			return;
+		}
+		final List<TradeHistory.Entry> parsed = new ArrayList<>();
+		int unreadable = 0;
+		for (TradeHistory.Row r : rows)
+		{
+			if (r.getParsed() != null)
+			{
+				parsed.add(r.getParsed());
+			}
+			else
+			{
+				unreadable++;
+			}
+			// the shape of these rows is only knowable from a live client, so the
+			// first look each session records what they actually said. The next
+			// parser revision comes from THIS, not from another guess.
+			if (!historyRawLogged)
+			{
+				final Map<String, Object> d = m();
+				d.put("item", r.getItemId());
+				d.put("qty", r.getQty());
+				d.put("parsed", r.getParsed() != null);
+				d.put("text", r.getRawText());
+				emit("geHistoryRow", d);
+			}
+		}
+		historyRawLogged = true;
+
+		// with nothing booked yet, every row the game shows is "unbooked" and the
+		// audit would be shouting about the absence of its own data
+		if (bookedOffers.isEmpty())
+		{
+			panel.setAudit(String.format("%d trades on record, none booked yet", rows.size()), true,
+				"RuneAI books offers it watched from placement. Flip once and reopen this to audit.");
+			return;
+		}
+
+		final List<TradeHistory.Discrepancy> diffs =
+			TradeHistory.reconcile(parsed, bookedOffers);
+		final long net = TradeHistory.netDelta(diffs);
+		final int matched = parsed.size() - diffs.size();
+
+		final Map<String, Object> d = m();
+		d.put("rows", rows.size());
+		d.put("parsed", parsed.size());
+		d.put("unreadable", unreadable);
+		d.put("matched", matched);
+		d.put("netDelta", net);
+		final List<Map<String, Object>> ds = new ArrayList<>();
+		for (TradeHistory.Discrepancy x : diffs)
+		{
+			final Map<String, Object> e = m();
+			e.put("item", x.getItemId());
+			e.put("kind", x.getKind().name());
+			e.put("gpDelta", x.getGpDelta());
+			e.put("detail", x.getDetail());
+			ds.add(e);
+		}
+		d.put("discrepancies", ds);
+		emit("geHistoryAudit", d);
+
+		final String summary = diffs.isEmpty()
+			? String.format("ledger matches the game on %d of %d trades", matched, parsed.size())
+			: String.format("%d of %d trades disagree · %+,d gp", diffs.size(), parsed.size(), net);
+		final StringBuilder tip = new StringBuilder("<html>");
+		tip.append(String.format("%d rows read, %d readable", rows.size(), parsed.size()));
+		if (unreadable > 0)
+		{
+			tip.append(String.format("<br>%d row(s) the parser could not read — logged as geHistoryRow", unreadable));
+		}
+		for (TradeHistory.Discrepancy x : diffs)
+		{
+			tip.append("<br>").append(client.getItemDefinition(x.getItemId()).getName())
+				.append(": ").append(x.getDetail());
+		}
+		panel.setAudit(summary, diffs.isEmpty(), tip.append("</html>").toString());
+
+		// one summary line, not one per row — an audit that spams is an audit
+		// nobody reads
+		client.addChatMessage(ChatMessageType.GAMEMESSAGE, "",
+			"<col=00b4ff>RuneAI</col> trade history audit — " + summary
+				+ (unreadable > 0 ? String.format(" (%d row(s) unreadable)", unreadable) : ""), null);
+		if (!diffs.isEmpty())
+		{
+			overlay.setAlert(String.format("LEDGER OFF BY %+,d gp", net), client.getTickCount() + 12);
+		}
+		log.info("GE history audit: {} rows, {} parsed, {} matched, net {}",
+			rows.size(), parsed.size(), matched, net);
+	}
+
+	/** Record a finished offer at the granularity the game's history reports. */
+	private void bookOffer(int itemId, int qty, int price, boolean buying)
+	{
+		if (qty <= 0)
+		{
+			return;
+		}
+		bookedOffers.add(new TradeHistory.Entry(itemId, qty, price, buying));
+		while (bookedOffers.size() > BOOKED_KEEP)
+		{
+			bookedOffers.remove(0);
+		}
+		saveBookedOffers();
+	}
+
+	private void loadBookedOffers()
+	{
+		try
+		{
+			final File f = new File(DATA_DIR, "booked-offers.json");
+			if (f.exists())
+			{
+				final List<TradeHistory.Entry> raw = gson.fromJson(
+					new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8),
+					new com.google.gson.reflect.TypeToken<List<TradeHistory.Entry>>(){}.getType());
+				if (raw != null)
+				{
+					bookedOffers.addAll(raw);
+				}
+			}
+		}
+		catch (Exception ex)
+		{
+			log.warn("booked offers load failed", ex);
+		}
+	}
+
+	private void saveBookedOffers()
+	{
+		try
+		{
+			Files.write(new File(DATA_DIR, "booked-offers.json").toPath(),
+				gson.toJson(bookedOffers).getBytes(StandardCharsets.UTF_8));
+		}
+		catch (Exception ex)
+		{
+			log.warn("booked offers save failed", ex);
+		}
 	}
 
 	// ================= anomaly watch =================
@@ -1770,10 +1979,48 @@ public class RuneAIPlugin extends Plugin
 
 	// ================= session P&L =================
 
-	/** P&L pauses while bank / GE / deposit box / shop is open — those are transfers, not gains/losses. */
-	private boolean pnlPaused()
+	/**
+	 * Interfaces behind which items move without anyone earning anything. Bank,
+	 * GE, deposit box, shop — and BOTH player-trade screens, because 3.5M arriving
+	 * from your own alt is a transfer in exactly the same way a bank withdrawal is.
+	 *
+	 * <p>gameval constants rather than the raw ints this used to carry. Verified
+	 * against RuneLite's own legacy mapping, which agrees on every group that
+	 * existed there: {@code BANKMAIN}/{@code BANK_GROUP_ID} 12,
+	 * {@code GE_OFFERS}/{@code GRAND_EXCHANGE_GROUP_ID} 465,
+	 * {@code BANK_DEPOSITBOX}/{@code DEPOSIT_BOX_GROUP_ID} 192,
+	 * {@code SHOPMAIN}/{@code SHOP_GROUP_ID} 300 and
+	 * {@code TRADEMAIN}/{@code PLAYER_TRADE_SCREEN_GROUP_ID} 335.
+	 * {@code TRADECONFIRM} has no legacy counterpart; it is the second screen,
+	 * which its own components name for it — {@code TRADE2ACCEPT},
+	 * {@code YOU_WILL_GIVE}, {@code YOU_WILL_RECEIVE}.
+	 */
+	private static final int[] TRANSFER_GROUPS = {
+		net.runelite.api.gameval.InterfaceID.BANKMAIN,
+		net.runelite.api.gameval.InterfaceID.GE_OFFERS,
+		net.runelite.api.gameval.InterfaceID.BANK_DEPOSITBOX,
+		net.runelite.api.gameval.InterfaceID.SHOPMAIN,
+		net.runelite.api.gameval.InterfaceID.TRADEMAIN,
+		net.runelite.api.gameval.InterfaceID.TRADECONFIRM,
+	};
+
+	/**
+	 * Ticks after a transfer interface closes during which the ledger stays
+	 * paused.
+	 *
+	 * <p>This is the actual bug, not the missing group id. A trade settles as the
+	 * confirm screen tears down, so the inventory change can land on the far side
+	 * of "is the widget open right now" and book the whole transfer as profit —
+	 * which is how a 3.5M gift from an alt showed up as +3,514,022 earned. Holding
+	 * the pause for a few ticks lets the arriving items be absorbed into the
+	 * baseline instead of counted as a gain.
+	 */
+	private static final int TRANSFER_GRACE_TICKS = 5;
+	private int lastTransferUiTick = -1000;
+
+	private boolean transferUiOpen()
 	{
-		for (int group : new int[]{12, 465, 192, 300})
+		for (int group : TRANSFER_GROUPS)
 		{
 			final net.runelite.api.widgets.Widget w = client.getWidget(group, 0);
 			if (w != null && !w.isHidden())
@@ -1782,6 +2029,17 @@ public class RuneAIPlugin extends Plugin
 			}
 		}
 		return false;
+	}
+
+	/** P&L pauses across transfers — those move items, they do not earn them. */
+	private boolean pnlPaused()
+	{
+		if (transferUiOpen())
+		{
+			lastTransferUiTick = client.getTickCount();
+			return true;
+		}
+		return client.getTickCount() - lastTransferUiTick <= TRANSFER_GRACE_TICKS;
 	}
 
 	private long itemValue(int id)

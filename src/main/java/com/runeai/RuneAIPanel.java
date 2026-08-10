@@ -47,6 +47,7 @@ public class RuneAIPanel extends PluginPanel
 	private final JLabel clogTitle = new JLabel("Trade log · 0 items");
 	private int clogCount;
 	private final JLabel scoreLine = new JLabel("first session — this one sets the bar");
+	private final JLabel auditLine = new JLabel("ledger unaudited — open the GE trade history");
 	private final JPanel scoreSection = new JPanel();
 	private final JPanel itemsBox = new JPanel();
 	private final JPanel itemsSection = new JPanel();
@@ -105,7 +106,18 @@ public class RuneAIPanel extends PluginPanel
 		scoreLine.setAlignmentX(LEFT_ALIGNMENT);
 		scoreLine.setToolTipText("<html>Realized flip profit this session vs your last one and your best.<br>"
 			+ "gp/h is measured over ACTIVE time — first offer placed to now.</html>");
-		buildSection(scoreSection, "Session scoreboard", OK_GREEN, scoreLine);
+		// the audit belongs next to the number it audits
+		auditLine.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+		auditLine.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		auditLine.setAlignmentX(LEFT_ALIGNMENT);
+		final JPanel scoreBody = new JPanel();
+		scoreBody.setLayout(new BoxLayout(scoreBody, BoxLayout.Y_AXIS));
+		scoreBody.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		scoreBody.setAlignmentX(LEFT_ALIGNMENT);
+		scoreBody.add(scoreLine);
+		scoreBody.add(Box.createVerticalStrut(6));
+		scoreBody.add(auditLine);
+		buildSection(scoreSection, "Session scoreboard", OK_GREEN, scoreBody);
 		container.add(scoreSection);
 		container.add(Box.createVerticalStrut(12));
 
@@ -441,6 +453,20 @@ public class RuneAIPanel extends PluginPanel
 				signed(s.getBestPnl()), compact(s.getBestGpHr()),
 				verdict, s.getBeaten(), s.getRanked()));
 			scoreLine.setForeground(Color.WHITE);
+		});
+	}
+
+	/**
+	 * What the game's own trade history said about our ledger. Green only when
+	 * the two agreed — a check nobody can fail is not a check.
+	 */
+	public void setAudit(String summary, boolean clean, String tooltip)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			auditLine.setText("<html>audit · " + summary + "</html>");
+			auditLine.setForeground(clean ? ColorScheme.LIGHT_GRAY_COLOR : ALERT);
+			auditLine.setToolTipText(tooltip);
 		});
 	}
 

@@ -44,6 +44,7 @@ All source lives in `src/main/java/com/runeai/`.
 | `FlipService.java` | Live GE intelligence off the wiki prices API: books, tax-aware margins, trap detection, lane classification, the velocity ranker, and the anomaly watch. Suggestions only. |
 | `FlipLane.java` | The QUICK / LONG taxonomy — pure classifier plus the volume-based cycle-time prior. |
 | `ItemMemory.java` | Per-item bandit memory persisted to `~/.runelite/runeai/item-memory.json`, with per-lane ledgers, recovery-based cooldown expiry, and the per-item results ranking (`rank()`). |
+| `TradeHistory.java` | Reads the in-game GE Trade History interface (read-only) and diffs it against our booked offers. Parse and reconciliation are pure statics; the widget walk is client-thread. |
 | `SessionHistory.java` | Per-session result rows in `~/.runelite/runeai/session-history.json` plus the "beat your last session" comparison math. All ranking is `static` and argument-fed, so it tests without a client. |
 | `FillTimeModel.java` | Dot-product inference for `train/flip_model.json`. Gated on that file's `verdict`. |
 | `GeBrain.java` | 7-16-1 tanh forward pass for `~/.runelite/runeai/ge-brain-hist.json`. Gated on `metrics.beats_baseline`. Moves ranking, never a coached price. |
@@ -115,9 +116,24 @@ RuneLite events ──> RuneAIPlugin (@Subscribe handlers)
   inventory/equipment at GE price) vs `ItemID.OLD_SCHOOL_BOND`; `panel.setBond(...)` every check, one-shot
   alert + `bond` voice guarded by `bondAnnounced`. `bankValue` is refreshed on `BANK` container changes.
 - **Session P&L** — `updatePnl()`: inventory + equipment quantity deltas priced at GE value
-  (coins count as 1 gp each). `pnlPaused()` suppresses the ledger while widget groups
-  12 / 465 / 192 / 300 (bank, GE, deposit box, shop) are open, because those are transfers, not profit.
-  `GameState.LOGIN_SCREEN` clears `lastHolding` only — `sessionPnl` is not reset.
+  (coins count as 1 gp each). `pnlPaused()` suppresses the ledger across transfers — `TRANSFER_GROUPS`
+  is `BANKMAIN`, `GE_OFFERS`, `BANK_DEPOSITBOX`, `SHOPMAIN`, `TRADEMAIN` and `TRADECONFIRM`. The pause
+  also holds for `TRANSFER_GRACE_TICKS` after the interface closes, and `transferUiOpen()` is polled
+  every tick, because a player trade settles as the confirm screen tears down: without the grace window
+  the inventory change lands after the widget is gone and the whole transfer books as profit (a 3.5M gift
+  from an alt read as +3,514,022 earned). `GameState.LOGIN_SCREEN` clears `lastHolding` only —
+  `sessionPnl` is not reset.
+- **GE trade history audit** — `TradeHistory` + `RuneAIPlugin.readTradeHistoryIfDue()`, triggered by
+  `WidgetLoaded` on `InterfaceID.GE_HISTORY` and read two ticks later (the interface loads empty and a
+  script fills it). READ-ONLY widget reading of an interface the player opened. `bookedOffers` holds our
+  side at one row per finished offer — the granularity the game reports — and only for offers watched
+  from placement, so a completed offer re-firing as `BOUGHT` on login cannot invent a second trade.
+  `reconcile()` is pure and accepts BOTH sell-price conventions (ask, or ask minus the 2%) because which
+  one the interface quotes is not something we get to assume. Gated on `tradeAudit()`.
+  **The row parse is the uncertain half**: item id and stack size come off the widget model, but
+  direction and price are read out of display text whose wording is only knowable from a live client.
+  `parseRow()` returns null rather than guessing, and every raw row is written to the event log as
+  `geHistoryRow` the first time the interface opens each session. Tighten the parser from that log.
 - **Price anomaly alert** — detected in `FlipService.anomalous()` inside the existing 60s quote scan
   (there is exactly one price poller and it must stay that way), triggered in
   `RuneAIPlugin.checkAnomalies()`. Two gates: real volume, and the move must appear on the instant-SELL
@@ -230,8 +246,12 @@ Voice is 100% local. There is no TTS network call at runtime and no audio is upl
 ### RuneLite API hygiene
 
 - Use `net.runelite.api.gameval` constants (`ItemID`, `InterfaceID`, `ObjectID`) instead of magic numbers
-  where they exist. The hardcoded P&L widget groups in `pnlPaused()` are a known debt — replace them with
-  gameval `InterfaceID` constants rather than adding more raw ints.
+  where they exist. The P&L widget-group debt is **paid** — `TRANSFER_GROUPS` is gameval `InterfaceID`
+  constants now. Keep it that way; do not add a raw group id anywhere.
+  Two things worth knowing when you need a new interface id: the gameval names cross-check against
+  RuneLite's own legacy `net.runelite.api.widgets.WidgetID` (they agree on every group that exists in
+  both), and each group has a nested component class — `InterfaceID.GeHistory`, `InterfaceID.Tradeconfirm`
+  — whose component names identify the screen far better than the number does.
 - `LinkBrowser.browse(...)` for URLs, never `java.awt.Desktop` (see the Ko-fi button).
 - `@Inject Gson` / `@Inject OkHttpClient` — never construct your own; do not add RuneLite's transitive
   deps to `build.gradle`.

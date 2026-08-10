@@ -198,6 +198,16 @@ public interface RuneAIConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "tradeAudit",
+		name = "Audit P&L vs GE history",
+		description = "When you open the in-game Trade History, read it and diff it against the profit RuneAI booked, then report the disagreements. Read-only — it only looks at an interface you opened"
+	)
+	default boolean tradeAudit()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "anomalyAlert",
 		name = "Price anomaly alert",
 		description = "Call out an item whose price has ripped away from where it was, on real volume and on both sides of the book. It states what moved and by how much — an RWT pump, an update panic and a bot ban look identical to a ranker, so the call stays yours"
