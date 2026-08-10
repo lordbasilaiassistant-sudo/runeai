@@ -29,6 +29,7 @@ public class GeSlotStampOverlay extends Overlay
 	private final Client client;
 	private final RuneAIConfig config;
 	private final FlipService flips;
+	private final net.runelite.client.game.ItemManager itemManager;
 
 	private volatile long[] offerStarts = new long[8];
 
@@ -38,11 +39,13 @@ public class GeSlotStampOverlay extends Overlay
 	}
 
 	@Inject
-	GeSlotStampOverlay(Client client, RuneAIConfig config, FlipService flips)
+	GeSlotStampOverlay(Client client, RuneAIConfig config, FlipService flips,
+		net.runelite.client.game.ItemManager itemManager)
 	{
 		this.client = client;
 		this.config = config;
 		this.flips = flips;
+		this.itemManager = itemManager;
 		setPosition(OverlayPosition.DYNAMIC);
 		setLayer(OverlayLayer.ABOVE_WIDGETS);
 	}
@@ -111,7 +114,15 @@ public class GeSlotStampOverlay extends Overlay
 			}
 			else
 			{
-				if (o.getPrice() > high)
+				final long heldExtra = heldInInventory(o.getItemId());
+				if (heldExtra > 0)
+				{
+					// selling while holding more of the same item wastes the slot:
+					// one consolidated offer moves everything
+					label = "ADD " + fmt(heldExtra) + " MORE · relist all";
+					c = MOVE;
+				}
+				else if (o.getPrice() > high)
 				{
 					label = "CANCEL · relist " + fmt(high - 1);
 					c = MOVE;
@@ -144,6 +155,26 @@ public class GeSlotStampOverlay extends Overlay
 			g.drawString(label, px + 6, py + 14);
 		}
 		return null;
+	}
+
+	private long heldInInventory(int itemId)
+	{
+		final net.runelite.api.ItemContainer inv =
+			client.getItemContainer(net.runelite.api.InventoryID.INVENTORY);
+		if (inv == null)
+		{
+			return 0;
+		}
+		long held = 0;
+		for (net.runelite.api.Item it : inv.getItems())
+		{
+			if (it != null && it.getId() > 0
+				&& itemManager.canonicalize(it.getId()) == itemId)
+			{
+				held += it.getQuantity();
+			}
+		}
+		return held;
 	}
 
 	private boolean isSlow(int slot, GrandExchangeOffer o)
