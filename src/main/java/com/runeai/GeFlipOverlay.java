@@ -22,7 +22,7 @@ import net.runelite.client.ui.overlay.OverlayPosition;
 public class GeFlipOverlay extends Overlay
 {
 	private static final Color GOLD = new Color(255, 200, 0);
-	private static final int W = 250;
+	private static final int W = 320;
 
 	private final Client client;
 	private final RuneAIConfig config;
@@ -120,8 +120,8 @@ public class GeFlipOverlay extends Overlay
 
 		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 		final int rows = top.isEmpty() ? 1 : Math.min(positions.isEmpty() ? 5 : 3, top.size());
-		final int posH = positions.isEmpty() ? 0 : 14 + positions.size() * 26;
-		final int h = 50 + posH + rows * 27 + 6;
+		final int posH = positions.isEmpty() ? 0 : 20 + positions.size() * 34;
+		final int h = 66 + posH + rows * 36 + 8;
 
 		g.setColor(new Color(12, 12, 18, 235));
 		g.fillRoundRect(0, 0, W, h, 10, 10);
@@ -129,64 +129,64 @@ public class GeFlipOverlay extends Overlay
 		g.setStroke(new BasicStroke(1.5f));
 		g.drawRoundRect(0, 0, W, h, 10, 10);
 
-		g.setFont(g.getFont().deriveFont(Font.BOLD, 13f));
+		g.setFont(g.getFont().deriveFont(Font.BOLD, 17f));
 		g.setColor(GOLD);
-		g.drawString("RuneAI · flips for YOUR budget", 10, 20);
+		g.drawString("RuneAI · flips for YOUR budget", 10, 24);
 
 		// pph telemetry: slot use + median fill times + suggestion record
-		g.setFont(g.getFont().deriveFont(Font.PLAIN, 10f));
+		g.setFont(g.getFont().deriveFont(Font.PLAIN, 13f));
 		final boolean idle = activeSlots < totalSlots;
 		g.setColor(idle ? new Color(255, 120, 100) : new Color(120, 220, 140));
 		String stat = String.format("slots %d/%d%s", activeSlots, totalSlots,
 			idle ? " — idle slots = lost gp/hr" : " ✓");
-		g.drawString(stat, 10, 33);
+		g.drawString(stat, 10, 41);
 		if (medBuySecs >= 0 || medSellSecs >= 0 || sugFills + sugCancels > 0)
 		{
 			g.setColor(Color.LIGHT_GRAY);
 			g.drawString(String.format("gp/h %,d · fills b~%ss s~%ss · calls %d✓/%d✗",
 				flipGpHr, medBuySecs < 0 ? "?" : medBuySecs, medSellSecs < 0 ? "?" : medSellSecs,
-				sugFills, sugCancels), 10, 44);
+				sugFills, sugCancels), 10, 56);
 		}
 
-		int y = 58;
+		int y = 74;
 
 		// YOUR OFFERS first — the money you have in flight
 		if (!positions.isEmpty())
 		{
-			g.setFont(g.getFont().deriveFont(Font.BOLD, 11f));
+			g.setFont(g.getFont().deriveFont(Font.BOLD, 13f));
 			g.setColor(new Color(140, 200, 255));
 			g.drawString("YOUR OFFERS", 10, y);
-			y += 13;
+			y += 17;
 			for (String[] pos : positions)
 			{
-				g.setFont(g.getFont().deriveFont(Font.BOLD, 11f));
+				g.setFont(g.getFont().deriveFont(Font.BOLD, 14f));
 				g.setColor("b".equals(pos[2]) ? new Color(140, 200, 255) : new Color(255, 170, 120));
 				g.drawString(pos[0], 10, y);
-				g.setFont(g.getFont().deriveFont(Font.PLAIN, 10f));
+				g.setFont(g.getFont().deriveFont(Font.PLAIN, 13f));
 				g.setColor(new Color(120, 220, 140));
-				g.drawString(pos[1], 16, y + 11);
-				y += 26;
+				g.drawString(pos[1], 16, y + 15);
+				y += 34;
 			}
 			y += 4;
 		}
 
 		if (top.isEmpty())
 		{
-			g.setFont(g.getFont().deriveFont(Font.PLAIN, 11f));
+			g.setFont(g.getFont().deriveFont(Font.PLAIN, 13f));
 			g.setColor(Color.LIGHT_GRAY);
 			g.drawString("fetching live prices…", 10, y);
 		}
 		for (int i = 0; i < rows && i < top.size(); i++)
 		{
 			final FlipService.Flip f = top.get(i);
-			g.setFont(g.getFont().deriveFont(Font.BOLD, 12f));
+			g.setFont(g.getFont().deriveFont(Font.BOLD, 15f));
 			g.setColor(Color.WHITE);
 			g.drawString(trunc(f.getName(), 26), 10, y);
-			g.setFont(g.getFont().deriveFont(Font.PLAIN, 11f));
+			g.setFont(g.getFont().deriveFont(Font.PLAIN, 13f));
 			g.setColor(GOLD);
-			g.drawString(String.format("buy %,d → sell %,d  +%,d  ~%,.0f/hr traded",
-				f.getBuyAt(), f.getSellAt(), f.getNet(), f.getUnitsHr() * 20), 10, y + 13);
-			y += 27;
+			g.drawString(String.format("buy %,d → sell %,d  +%,d  ~%,.0f/hr",
+				f.getBuyAt(), f.getSellAt(), f.getNet(), f.getUnitsHr() * 20), 10, y + 16);
+			y += 36;
 		}
 		return new Dimension(W, h);
 	}
@@ -195,16 +195,16 @@ public class GeFlipOverlay extends Overlay
 	{
 		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 		final long[] q = flips.quoteFor(itemId);
-		final int h = 118;
+		final int h = 150;
 		g.setColor(new Color(12, 12, 18, 235));
 		g.fillRoundRect(0, 0, W, h, 10, 10);
 		g.setColor(new Color(GOLD.getRed(), GOLD.getGreen(), GOLD.getBlue(), 200));
 		g.setStroke(new BasicStroke(1.5f));
 		g.drawRoundRect(0, 0, W, h, 10, 10);
 
-		g.setFont(g.getFont().deriveFont(Font.BOLD, 13f));
+		g.setFont(g.getFont().deriveFont(Font.BOLD, 17f));
 		g.setColor(GOLD);
-		g.drawString(trunc(flips.nameFor(itemId), 28), 10, 20);
+		g.drawString(trunc(flips.nameFor(itemId), 28), 10, 24);
 
 		if (q == null)
 		{
@@ -224,17 +224,18 @@ public class GeFlipOverlay extends Overlay
 		}
 		final long total = net * qty;
 
-		g.setFont(g.getFont().deriveFont(Font.PLAIN, 12f));
+		g.setFont(g.getFont().deriveFont(Font.BOLD, 15f));
 		g.setColor(Color.WHITE);
-		g.drawString(String.format("BUY at  %,d      SELL at  %,d", buyAt, sellAt), 10, 42);
+		g.drawString(String.format("BUY at  %,d      SELL at  %,d", buyAt, sellAt), 10, 50);
 		g.setColor(net > 0 ? new Color(120, 220, 140) : new Color(255, 120, 100));
-		g.drawString(String.format("net %+,d each after tax", net), 10, 60);
+		g.setFont(g.getFont().deriveFont(Font.PLAIN, 14f));
+		g.drawString(String.format("net %+,d each after tax", net), 10, 74);
 		g.setColor(Color.LIGHT_GRAY);
-		g.setFont(g.getFont().deriveFont(Font.PLAIN, 11f));
-		g.drawString(String.format("~%,d traded/hr · buy limit %,d", volHr, limit), 10, 78);
-		g.setFont(g.getFont().deriveFont(Font.BOLD, 12f));
+		g.setFont(g.getFont().deriveFont(Font.PLAIN, 13f));
+		g.drawString(String.format("~%,d traded/hr · buy limit %,d", volHr, limit), 10, 96);
+		g.setFont(g.getFont().deriveFont(Font.BOLD, 15f));
 		g.setColor(GOLD);
-		g.drawString(String.format("suggested qty %,d  →  total %+,d gp", qty, total), 10, 98);
+		g.drawString(String.format("suggested qty %,d  →  total %+,d gp", qty, total), 10, 122);
 		return new Dimension(W, h);
 	}
 

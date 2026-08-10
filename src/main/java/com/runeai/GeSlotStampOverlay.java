@@ -116,15 +116,15 @@ public class GeSlotStampOverlay extends Overlay
 			{
 				continue;
 			}
-			g.setFont(g.getFont().deriveFont(Font.BOLD, 10f));
+			g.setFont(g.getFont().deriveFont(Font.BOLD, 13f));
 			final int tw = g.getFontMetrics().stringWidth(label);
 			final int px = b.x + (b.width - tw) / 2 - 5;
-			final int py = b.y + b.height - 16;
+			final int py = b.y + b.height - 21;
 			g.setColor(new Color(10, 10, 14, 220));
-			g.fillRoundRect(px, py, tw + 10, 14, 7, 7);
+			g.fillRoundRect(px, py, tw + 12, 18, 9, 9);
 			g.setColor(c);
-			g.drawRoundRect(px, py, tw + 10, 14, 7, 7);
-			g.drawString(label, px + 5, py + 11);
+			g.drawRoundRect(px, py, tw + 12, 18, 9, 9);
+			g.drawString(label, px + 6, py + 14);
 		}
 		return null;
 	}
