@@ -48,21 +48,28 @@ def ge_tax(p):
 
 
 class Net:
-    """Tiny MLP: 7 features -> 16 tanh -> predicted log(sell/buy) ratio."""
+    """Tiny MLP + per-item personality: shared 7->16 tanh body generalizes
+    across items; a learned per-item bias lets frequently-traded items earn
+    their OWN signature (mixed-effects style, L2-shrunk so rare items fall
+    back to the general model)."""
 
     def __init__(self, rng):
         self.W1 = rng.normal(0, 0.3, (7, 16))
         self.b1 = np.zeros(16)
         self.W2 = rng.normal(0, 0.3, (16, 1))
         self.b2 = np.zeros(1)
+        self.item_bias = {}   # item id -> learned personal offset
 
-    def forward(self, x):
+    def forward(self, x, ids=None):
         self.x = x
         self.h = np.tanh(x @ self.W1 + self.b1)
-        return (self.h @ self.W2 + self.b2)[:, 0]
+        out = (self.h @ self.W2 + self.b2)[:, 0]
+        if ids is not None:
+            out = out + np.array([self.item_bias.get(i, 0.0) for i in ids])
+        return out
 
-    def train(self, x, y, lr=0.02):
-        pred = self.forward(x)
+    def train(self, x, y, ids=None, lr=0.02):
+        pred = self.forward(x, ids)
         err = (pred - y)[:, None]                    # dLoss/dOut (MSE/2)
         gW2 = self.h.T @ err / len(y)
         gb2 = err.mean(0)
@@ -73,11 +80,17 @@ class Net:
         self.b2 -= lr * gb2
         self.W1 -= lr * gW1
         self.b1 -= lr * gb1
+        if ids is not None:
+            for i, iid in enumerate(ids):
+                b = self.item_bias.get(iid, 0.0)
+                self.item_bias[iid] = b * 0.999 - 0.05 * lr * float(err[i][0]) * 40
         return float(np.mean((pred - y) ** 2))
 
     def dump(self):
         return dict(W1=self.W1.tolist(), b1=self.b1.tolist(),
-                    W2=self.W2.tolist(), b2=self.b2.tolist())
+                    W2=self.W2.tolist(), b2=self.b2.tolist(),
+                    item_bias={str(k): round(v, 5) for k, v in self.item_bias.items()
+                               if abs(v) > 0.001})
 
 
 def features(low, high, vol, prev_mid, hour):
@@ -135,7 +148,7 @@ def main():
         # 1. score + train on last cycle's predictions
         if pending:
             ids, X, base_high = pending
-            y, Xs, mart = [], [], []
+            y, Xs, mart, ids_used = [], [], [], []
             realized = {}
             for i, iid in enumerate(ids):
                 cur = rows.get(iid)
@@ -143,13 +156,14 @@ def main():
                     continue
                 actual_ratio = math.log(cur[1] / max(base_high[i][0], 2))
                 y.append(actual_ratio)
+                ids_used.append(iid)
                 Xs.append(X[i])
                 mart.append(math.log(base_high[i][1] / max(base_high[i][0], 2)))
                 realized[iid] = cur
             if y:
                 Xs = np.array(Xs)
                 ya = np.array(y)
-                preds = net.forward(Xs)
+                preds = net.forward(Xs, ids_used)
                 rel_err = np.abs(np.exp(preds) - np.exp(ya)) / np.exp(ya)
                 reward = np.exp(-rel_err * 40)          # exact -> ~1, off -> ~0
                 exact_hits += float((rel_err < 0.002).sum())
@@ -157,7 +171,7 @@ def main():
                 net_sse += float(((preds - ya) ** 2).sum())
                 mart_sse += float(((np.array(mart) - ya) ** 2).sum())
                 n_train += len(ya)
-                net.train(Xs, ya)
+                net.train(Xs, ya, ids_used)
 
                 # 2. grade last cycle's profit picks (policy regret)
                 if picks:
@@ -180,7 +194,7 @@ def main():
             base_high.append((lo, hi))
             prev[iid] = (lo, hi, vol, (lo + hi) / 2)
         if ids:
-            preds = net.forward(np.array(X))
+            preds = net.forward(np.array(X), ids)
             pred_sell = [b[0] * math.exp(p) for b, p in zip(base_high, preds)]
             pred_profit = [ps - ge_tax(int(ps)) - b[0] - 1
                            for ps, b in zip(pred_sell, base_high)]
