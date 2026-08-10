@@ -124,6 +124,7 @@ public class RuneAIPlugin extends Plugin
 		long startMs;
 		int lastQty;      // for delta accounting: partial fills count immediately
 		long lastSpent;
+		long lastFillMs;  // stall detection: time since anything moved
 	}
 	private final OfferTrack[] offerTracks = new OfferTrack[8];
 	private final List<Long> buyFillSecs = new ArrayList<>();
@@ -397,6 +398,7 @@ public class RuneAIPlugin extends Plugin
 				tr.price = o.getPrice();
 				tr.buying = buying;
 				tr.startMs = nowMs;
+				tr.lastFillMs = nowMs;
 				offerTracks[slot] = tr;
 			}
 		}
@@ -409,6 +411,7 @@ public class RuneAIPlugin extends Plugin
 			final long dCoins = o.getSpent() - tr.lastSpent;
 			if (dQty > 0)
 			{
+				tr.lastFillMs = nowMs;
 				if (buying)
 				{
 					flipBasis.merge(o.getItemId(), new long[]{dQty, dCoins},
@@ -426,6 +429,16 @@ public class RuneAIPlugin extends Plugin
 						cost = avg * q;
 						basis[0] -= q;
 						basis[1] -= cost;
+						if (q < dQty)
+						{
+							cost += syntheticCost(o.getItemId(), o.getPrice(), dQty - q);
+						}
+					}
+					else
+					{
+						// no recorded basis (bought before tracking): assume market
+						// buy price so profit = the spread, never the full proceeds
+						cost = syntheticCost(o.getItemId(), o.getPrice(), dQty);
 					}
 					// sell − buy − tax, computed explicitly: 2% per item (floored),
 					// only on taxable items — never trust the API field's semantics
@@ -571,7 +584,7 @@ public class RuneAIPlugin extends Plugin
 			final long[] starts = new long[8];
 			for (int i = 0; i < 8; i++)
 			{
-				starts[i] = offerTracks[i] != null ? offerTracks[i].startMs : 0;
+				starts[i] = offerTracks[i] != null ? offerTracks[i].lastFillMs : 0;
 			}
 			geSlotStampOverlay.setOfferStarts(starts);
 			geFlipOverlay.setStats(active, slots, median(buyFillSecs), median(sellFillSecs),
@@ -621,6 +634,13 @@ public class RuneAIPlugin extends Plugin
 		recordTickVector(lp);
 		updateGuidance(lp);
 		damageTakenThisTick = 0;
+	}
+
+	private long syntheticCost(int itemId, int sellPrice, long qty)
+	{
+		final long[] q = flipService.quoteFor(itemId);
+		final long unit = q != null && q[0] > 0 ? q[0] : sellPrice;
+		return unit * qty;
 	}
 
 	private static long median(List<Long> v)

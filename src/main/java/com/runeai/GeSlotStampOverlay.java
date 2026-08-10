@@ -100,7 +100,7 @@ public class GeSlotStampOverlay extends Overlay
 				}
 				else if (isSlow(i, o))
 				{
-					label = "SLOW " + ageMin(i) + "m · reprice?";
+					label = "STALLED " + ageMin(i) + "m · reprice?";
 					c = MOVE;
 				}
 				else
@@ -118,7 +118,7 @@ public class GeSlotStampOverlay extends Overlay
 				}
 				else if (isSlow(i, o))
 				{
-					label = "SLOW " + ageMin(i) + "m · undercut?";
+					label = "STALLED " + ageMin(i) + "m · undercut?";
 					c = MOVE;
 				}
 				else
@@ -148,8 +148,9 @@ public class GeSlotStampOverlay extends Overlay
 
 	private boolean isSlow(int slot, GrandExchangeOffer o)
 	{
-		// priced right but not moving: 5+ min with zero fills = velocity problem
-		return offerStarts[slot] > 0 && o.getQuantitySold() == 0
+		// priced right but nothing has moved in 5+ min (partials included)
+		return offerStarts[slot] > 0
+			&& o.getQuantitySold() < o.getTotalQuantity()
 			&& System.currentTimeMillis() - offerStarts[slot] > 5 * 60_000;
 	}
 
