@@ -156,6 +156,21 @@ public class GeSlotStampOverlay extends Overlay
 			{
 				continue;
 			}
+			// offer age timer, top-right of the slot (persists across restarts)
+			if (offerPlaced[i] > 0)
+			{
+				final long secs = (System.currentTimeMillis() - offerPlaced[i]) / 1000;
+				final String age = secs < 60 ? secs + "s"
+					: secs < 3600 ? (secs / 60) + "m" + (secs % 60 < 10 ? "0" : "") + (secs % 60) + "s"
+					: (secs / 3600) + "h" + ((secs % 3600) / 60) + "m";
+				g.setFont(g.getFont().deriveFont(Font.BOLD, 12f));
+				final int aw = g.getFontMetrics().stringWidth(age);
+				g.setColor(new Color(10, 10, 14, 200));
+				g.fillRoundRect(b.x + b.width - aw - 12, b.y + 2, aw + 10, 15, 7, 7);
+				g.setColor(secs > 1800 ? ABORT : secs > 300 ? MOVE : new Color(255, 255, 0));
+				g.drawString(age, b.x + b.width - aw - 7, b.y + 14);
+			}
+
 			g.setFont(g.getFont().deriveFont(Font.BOLD, 13f));
 			final int tw = g.getFontMetrics().stringWidth(label);
 			final int px = b.x + (b.width - tw) / 2 - 5;
