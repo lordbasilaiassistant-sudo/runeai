@@ -486,7 +486,9 @@ public class RuneAIPlugin extends Plugin
 				? flipRealized * 3600_000L / Math.max(60_000, System.currentTimeMillis() - firstOfferMs)
 				: 0;
 			geFlipOverlay.setStats(active, slots, median(buyFillSecs), median(sellFillSecs),
-				sugFills, sugCancels, flipGpHr);
+				sugFills, sugCancels, flipGpHr, flipRealized,
+				buyFillSecs.size(), sellFillSecs.size(),
+				firstOfferMs > 0 ? (System.currentTimeMillis() - firstOfferMs) / 60_000 : 0);
 		}
 
 		panel.setCounts(client.getNpcs().size(), client.getPlayers().size(),

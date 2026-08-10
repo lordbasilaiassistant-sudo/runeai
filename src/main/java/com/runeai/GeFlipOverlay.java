@@ -22,7 +22,7 @@ import net.runelite.client.ui.overlay.OverlayPosition;
 public class GeFlipOverlay extends Overlay
 {
 	private static final Color GOLD = new Color(255, 200, 0);
-	private static final int W = 320;
+	private static final int W = 290;
 
 	private final Client client;
 	private final RuneAIConfig config;
@@ -33,10 +33,18 @@ public class GeFlipOverlay extends Overlay
 	private volatile int sugFills, sugCancels;
 
 	private volatile long flipGpHr;
+	private volatile long realized;
+	private volatile int buys, sells;
+	private volatile long sessionMin;
 
-	void setStats(int active, int total, long medBuy, long medSell, int fills, int cancels, long gpHr)
+	void setStats(int active, int total, long medBuy, long medSell, int fills, int cancels,
+		long gpHr, long realizedPnl, int buyCount, int sellCount, long sessMin)
 	{
 		flipGpHr = gpHr;
+		realized = realizedPnl;
+		buys = buyCount;
+		sells = sellCount;
+		sessionMin = sessMin;
 		activeSlots = active;
 		totalSlots = total;
 		medBuySecs = medBuy;
@@ -119,9 +127,11 @@ public class GeFlipOverlay extends Overlay
 		}
 
 		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-		final int rows = top.isEmpty() ? 1 : Math.min(positions.isEmpty() ? 5 : 3, top.size());
+		final int freeSlots = Math.max(0, totalSlots - activeSlots);
+		final int rows = Math.min(Math.min(freeSlots == 0 ? 0 : Math.max(freeSlots, 1), 3),
+			top.size());
 		final int posH = positions.isEmpty() ? 0 : 20 + positions.size() * 34;
-		final int h = 66 + posH + rows * 36 + 8;
+		final int h = 66 + posH + (rows > 0 ? rows * 36 : 0) + 40;
 
 		g.setColor(new Color(12, 12, 18, 235));
 		g.fillRoundRect(0, 0, W, h, 10, 10);
@@ -143,9 +153,8 @@ public class GeFlipOverlay extends Overlay
 		if (medBuySecs >= 0 || medSellSecs >= 0 || sugFills + sugCancels > 0)
 		{
 			g.setColor(Color.LIGHT_GRAY);
-			g.drawString(String.format("gp/h %,d · fills b~%ss s~%ss · calls %d✓/%d✗",
-				flipGpHr, medBuySecs < 0 ? "?" : medBuySecs, medSellSecs < 0 ? "?" : medSellSecs,
-				sugFills, sugCancels), 10, 56);
+			g.drawString(String.format("fills: buy ~%ss · sell ~%ss",
+				medBuySecs < 0 ? "?" : medBuySecs, medSellSecs < 0 ? "?" : medSellSecs), 10, 56);
 		}
 
 		int y = 74;
@@ -170,13 +179,13 @@ public class GeFlipOverlay extends Overlay
 			y += 4;
 		}
 
-		if (top.isEmpty())
+		if (rows > 0 && top.isEmpty())
 		{
 			g.setFont(g.getFont().deriveFont(Font.PLAIN, 13f));
 			g.setColor(Color.LIGHT_GRAY);
 			g.drawString("fetching live prices…", 10, y);
 		}
-		for (int i = 0; i < rows && i < top.size(); i++)
+		for (int i = 0; i < rows; i++)
 		{
 			final FlipService.Flip f = top.get(i);
 			g.setFont(g.getFont().deriveFont(Font.BOLD, 15f));
@@ -188,6 +197,17 @@ public class GeFlipOverlay extends Overlay
 				f.getBuyAt(), f.getSellAt(), f.getNet(), f.getUnitsHr() * 20), 10, y + 16);
 			y += 36;
 		}
+
+		// SESSION stats footer — the numbers that matter
+		g.setColor(new Color(255, 255, 255, 40));
+		g.drawLine(10, y - 4, W - 10, y - 4);
+		g.setFont(g.getFont().deriveFont(Font.BOLD, 14f));
+		g.setColor(realized >= 0 ? new Color(120, 220, 140) : new Color(255, 100, 100));
+		g.drawString(String.format("SESSION %+,d gp · %,d gp/h", realized, flipGpHr), 10, y + 12);
+		g.setFont(g.getFont().deriveFont(Font.PLAIN, 12f));
+		g.setColor(Color.LIGHT_GRAY);
+		g.drawString(String.format("%d buys · %d sells · calls %d✓/%d✗ · %dm",
+			buys, sells, sugFills, sugCancels, sessionMin), 10, y + 27);
 		return new Dimension(W, h);
 	}
 
