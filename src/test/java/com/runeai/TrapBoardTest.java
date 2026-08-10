@@ -37,6 +37,23 @@ public class TrapBoardTest
 	}
 
 	@Test
+	public void oneRepriceNeverGivesAwayMoreThanATaxWorth()
+	{
+		// the live complaint: sells stalling 5-8 min on a margin pick. A wide book
+		// used to hand back a quarter of the spread in a single step.
+		assertEquals(20, GeSlotStampOverlay.repriceStep(1_000, 2_000)); // 2%, not 250
+		// narrow book: the spread itself is the binding constraint
+		assertEquals(12, GeSlotStampOverlay.repriceStep(1_000, 1_050));
+		// never zero, or the stamp re-suggests the price that already stalled
+		assertTrue(GeSlotStampOverlay.repriceStep(10, 11) >= 1);
+		// the step stays under 2% of the item's value however wide the book looks
+		for (long high = 1_000; high <= 300_000; high += 7_919)
+		{
+			assertTrue(GeSlotStampOverlay.repriceStep(1_000, high) <= 20);
+		}
+	}
+
+	@Test
 	public void boardTicketMatchesTheAnalysisOutput()
 	{
 		// one row exactly as sim/whale_trap_report.py writes it

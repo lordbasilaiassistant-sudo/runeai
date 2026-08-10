@@ -93,7 +93,7 @@ public class GeSlotStampOverlay extends Overlay
 
 			// a stalled offer at the quote isn't clearing — the reprice must step
 			// DEEPER into the spread, never re-suggest the same number
-			final long spreadStep = Math.max(1, (high - low) / 4);
+			final long spreadStep = repriceStep(low, high);
 			if (config.trapGuard() && flips.isTrap(o.getItemId()))
 			{
 				// One-sided book: the only recent high print is a whale overpaying
@@ -229,6 +229,19 @@ public class GeSlotStampOverlay extends Overlay
 			}
 		}
 		return held;
+	}
+
+	/**
+	 * How far one reprice is allowed to move. A quarter of the spread is the
+	 * shape, but the hard limit is 2% of what the item is actually worth — one
+	 * tax-worth. A stalled offer wants an undercut; giving away a quarter of a
+	 * wide book in one step is capitulation, and on a book whose high side is
+	 * inflated it hands back the whole margin the offer was placed for. If a 2%
+	 * ladder never clears, the item is the problem, not the price.
+	 */
+	static long repriceStep(long low, long high)
+	{
+		return Math.max(1, Math.min((high - low) / 4, Math.max(1, low / 50)));
 	}
 
 	private boolean isDead(int slot, GrandExchangeOffer o)

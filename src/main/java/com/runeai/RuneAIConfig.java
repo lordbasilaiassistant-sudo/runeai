@@ -158,6 +158,16 @@ public interface RuneAIConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "trapSlots",
+		name = "Trap slots",
+		description = "GE slots reserved for blue-moon patience orders. Every other slot stays on the quick-flip lane — the board only ever suggests enough to top this up"
+	)
+	default int trapSlots()
+	{
+		return 2;
+	}
+
+	@ConfigItem(
 		keyName = "recordTicks",
 		name = "Record tick vectors",
 		description = "Write a fixed-shape state record every game tick to .runelite/runeai/ticks-*.jsonl — NN training data (restart plugin to apply)"

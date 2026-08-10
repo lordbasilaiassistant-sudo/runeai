@@ -678,6 +678,8 @@ public class RuneAIPlugin extends Plugin
 
 			// slot utilization: an idle slot is wasted throughput
 			int active = 0;
+			int trapActive = 0;
+			final Set<Integer> onOffer = new java.util.HashSet<>();
 			final net.runelite.api.GrandExchangeOffer[] offers = client.getGrandExchangeOffers();
 			final int slots = membersW ? 8 : 3;
 			for (int i = 0; i < Math.min(slots, offers.length); i++)
@@ -686,6 +688,11 @@ public class RuneAIPlugin extends Plugin
 				if (os != net.runelite.api.GrandExchangeOfferState.EMPTY)
 				{
 					active++;
+					onOffer.add(offers[i].getItemId());
+					if (flipService.isTrap(offers[i].getItemId()))
+					{
+						trapActive++; // a parked patience order, still costing a slot
+					}
 				}
 			}
 			long flipGpHr; // kept for chat command
@@ -723,10 +730,10 @@ public class RuneAIPlugin extends Plugin
 				}
 			}
 			geFlipOverlay.setPendingSells(pendingSells);
-			// the hail-mary board: idle slots overnight are free lottery tickets
+			// the hail-mary board: a small rotating corner of the slot budget
 			trapBoard.maybeReload();
-			flipService.setWhaleCorridor(trapBoard.tradedIds());
-			final java.util.List<TrapBoard.Pick> picks = trapPicks(coins, slots - active);
+			final java.util.List<TrapBoard.Pick> picks = trapPicks(coins,
+				Math.min(slots - active, config.trapSlots() - trapActive), onOffer);
 			geFlipOverlay.setTraps(picks);
 			panel.setTraps(picks);
 			geFlipOverlay.setStats(active, slots, median(buyFillSecs), median(sellFillSecs),
@@ -780,14 +787,19 @@ public class RuneAIPlugin extends Plugin
 	}
 
 	/**
-	 * The overnight trap portfolio. History (which items catch whales, and the
-	 * number they type) comes from the trap board; the price to actually PAY comes
-	 * from today's live book, because the log's "real" price is as old as the print.
-	 * Cheap tickets only — a lottery never gets more than a tenth of the stack.
+	 * The overnight trap portfolio — a small ROTATION, not a portfolio. It only
+	 * ever proposes enough to top the reserved trap slots back up, so the rest of
+	 * the GE stays on the quick-flip lane. Items already on offer are skipped,
+	 * which is what makes it rotate: park one and the next ticket comes up.
+	 *
+	 * <p>History (which items catch whales, and the number they type) comes from
+	 * the trap board; the price to actually PAY comes from today's live book,
+	 * because the log's "real" price is as old as the print. Cheap tickets only —
+	 * a lottery never gets more than a tenth of the stack.
 	 */
-	private List<TrapBoard.Pick> trapPicks(long coins, int freeSlots)
+	private List<TrapBoard.Pick> trapPicks(long coins, int budget, Set<Integer> onOffer)
 	{
-		if (!config.trapBoard() || freeSlots <= 0)
+		if (!config.trapBoard() || budget <= 0)
 		{
 			return Collections.emptyList();
 		}
@@ -796,9 +808,13 @@ public class RuneAIPlugin extends Plugin
 		long spent = 0;
 		for (TrapBoard.Ticket t : trapBoard.getTickets())
 		{
-			if (out.size() >= Math.min(freeSlots, 4))
+			if (out.size() >= budget)
 			{
 				break;
+			}
+			if (onOffer.contains(t.getId()))
+			{
+				continue; // already parked — rotate to the next ticket
 			}
 			final long[] book = flipService.bookFor(t.getId());
 			if (book != null && !flipService.isTrap(t.getId()))

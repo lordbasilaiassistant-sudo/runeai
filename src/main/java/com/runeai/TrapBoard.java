@@ -37,7 +37,6 @@ class TrapBoard
 	private volatile long loadedStamp = -1;
 
 	private volatile List<Ticket> tickets = List.of();
-	private volatile Set<Integer> ids = Set.of();
 	private volatile int prints;
 	private volatile long totalOverpay;
 
@@ -87,12 +86,6 @@ class TrapBoard
 		return tickets;
 	}
 
-	/** Items with a whale history — never grind the spread on these. */
-	Set<Integer> tradedIds()
-	{
-		return ids;
-	}
-
 	int getPrints()
 	{
 		return prints;
@@ -136,13 +129,7 @@ class TrapBoard
 			{
 				return;
 			}
-			final java.util.Set<Integer> seen = new java.util.HashSet<>();
-			for (Ticket t : b.items)
-			{
-				seen.add(t.id);
-			}
 			tickets = List.copyOf(b.items);
-			ids = Set.copyOf(seen);
 			prints = b.prints;
 			totalOverpay = b.totalOverpay;
 			loadedStamp = stamp;

@@ -54,7 +54,6 @@ class FlipService
 	private final Map<Integer, long[]> quotes = new ConcurrentHashMap<>(); // id -> {buyAt, sellAt (capped), volHr}
 	private final Map<Integer, long[]> books = new ConcurrentHashMap<>();  // id -> {low, high RAW, vol5m, highTime}
 	private final java.util.Set<Integer> trapItems = ConcurrentHashMap.newKeySet();
-	private volatile java.util.Set<Integer> whaleCorridor = java.util.Set.of();
 	private final Map<Integer, Long> predictedMid = new ConcurrentHashMap<>(); // last scan's forecast
 	private final Map<Integer, java.util.ArrayDeque<Long>> midHist = new ConcurrentHashMap<>(); // ~30min window
 	private final Map<Integer, Double> momentum = new ConcurrentHashMap<>();   // slope over the window
@@ -168,25 +167,21 @@ class FlipService
 	 * ranker (exclude) and the trap board (these ARE the patience-order targets).
 	 * A huge spread with no volume behind it is not a margin; it is one impatient
 	 * buyer and an empty book.
+	 *
+	 * <p>Deliberately a PURE FUNCTION of one scan's quote data — no history, no
+	 * memory, no blacklist. An item is a trap only while its book looks like one;
+	 * the moment liquidity comes back it is an ordinary flip candidate again. Any
+	 * recovery/revisit logic built on top can rely on that.
 	 */
 	static boolean trapBook(long low, long high, long vol5m)
 	{
 		return low > 0 && high >= low * MAX_QUOTE_MULT && vol5m < THIN_VOL_5M;
 	}
 
+	/** Live classification, re-decided for every item on every 60s scan. */
 	boolean isTrap(int itemId)
 	{
 		return trapItems.contains(itemId);
-	}
-
-	/**
-	 * Items with a whale-strike history (from the trap board). They are patience
-	 * orders, not flips — keep them out of the spread ranking even on a day their
-	 * book happens to look tradeable.
-	 */
-	void setWhaleCorridor(java.util.Set<Integer> itemIds)
-	{
-		whaleCorridor = itemIds;
 	}
 
 	/** Highest price we will ever coach for this item, whatever the tape says. */
@@ -394,8 +389,10 @@ class FlipService
 				// Trap items are never spread grinds. Today the liquidity+freshness
 				// filters below already keep all 76 known whale-corridor items out of
 				// the ranking (measured), but that is a side effect of thresholds the
-				// ranking work will keep re-tuning — so say it outright here.
-				if (trapBook(low, high, vol) || whaleCorridor.contains(id))
+				// ranking work will keep re-tuning — so say it outright here. Judged
+				// on THIS scan only: an item whose book recovers is eligible again on
+				// the very next refresh.
+				if (trapBook(low, high, vol))
 				{
 					continue;
 				}
