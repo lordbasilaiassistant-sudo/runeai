@@ -34,6 +34,16 @@ class FlipService
 	private static final long FAST_MS = 60_000;      // quotes: keep up with undercut wars
 	private static final long SLOW_MS = 5 * 60_000;  // volumes: change slowly
 
+	/**
+	 * A real two-sided book keeps the instant-buy print within a small multiple of
+	 * the instant-sell print. Past this, "high" is a PRINT, not a price — one whale
+	 * paying 45k for a 100gp hat — and every number derived from it is fiction.
+	 * Hard ceiling on anything we ever quote back at the player.
+	 */
+	static final double MAX_QUOTE_MULT = 3.0;
+	/** Liquidity floor, same 5-minute volume the ranker already requires. */
+	static final long THIN_VOL_5M = 30;
+
 	private final OkHttpClient http;
 	private final Gson gson;
 
@@ -41,7 +51,9 @@ class FlipService
 	private final Map<Integer, String> names = new ConcurrentHashMap<>();
 	private final Map<Integer, Boolean> membersItem = new ConcurrentHashMap<>();
 	private volatile List<Flip> allFlips = List.of();
-	private final Map<Integer, long[]> quotes = new ConcurrentHashMap<>(); // id -> {buyAt, sellAt, volHr}
+	private final Map<Integer, long[]> quotes = new ConcurrentHashMap<>(); // id -> {buyAt, sellAt (capped), volHr}
+	private final Map<Integer, long[]> books = new ConcurrentHashMap<>();  // id -> {low, high RAW, vol5m, highTime}
+	private final java.util.Set<Integer> trapItems = ConcurrentHashMap.newKeySet();
 	private final Map<Integer, Long> predictedMid = new ConcurrentHashMap<>(); // last scan's forecast
 	private final Map<Integer, java.util.ArrayDeque<Long>> midHist = new ConcurrentHashMap<>(); // ~30min window
 	private final Map<Integer, Double> momentum = new ConcurrentHashMap<>();   // slope over the window
@@ -134,10 +146,43 @@ class FlipService
 	// suggestion attribution: did the user trade what we showed, near our price?
 	private final Map<Integer, long[]> suggested = new ConcurrentHashMap<>(); // id -> {buy, sell, whenMs}
 
-	/** Live quote + qty/profit coaching for ANY item (the offer-setup coach). */
+	/**
+	 * Live quote + qty/profit coaching for ANY item (the offer-setup coach).
+	 * The sell side is CAPPED at {@link #MAX_QUOTE_MULT}x the low side, so a whale
+	 * overpay print can never become a price we read back to the player.
+	 */
 	long[] quoteFor(int itemId)
 	{
-		return quotes.get(itemId); // {buyAt, sellAt, volHr} or null
+		return quotes.get(itemId); // {buyAt, sellAt (capped), volHr} or null
+	}
+
+	/** Raw, uncapped book for display/analysis only: {low, high, vol5m, highTime}. */
+	long[] bookFor(int itemId)
+	{
+		return books.get(itemId);
+	}
+
+	/**
+	 * THE trap definition — one place, used by the reprice coach (mute), the flip
+	 * ranker (exclude) and the trap board (these ARE the patience-order targets).
+	 * A huge spread with no volume behind it is not a margin; it is one impatient
+	 * buyer and an empty book.
+	 */
+	static boolean trapBook(long low, long high, long vol5m)
+	{
+		return low > 0 && high >= low * MAX_QUOTE_MULT && vol5m < THIN_VOL_5M;
+	}
+
+	boolean isTrap(int itemId)
+	{
+		return trapItems.contains(itemId);
+	}
+
+	/** Highest price we will ever coach for this item, whatever the tape says. */
+	long saneCeiling(int itemId)
+	{
+		final long[] b = books.get(itemId);
+		return b == null ? Long.MAX_VALUE : (long) (b[0] * MAX_QUOTE_MULT);
 	}
 
 	int limitFor(int itemId)
@@ -320,13 +365,27 @@ class FlipService
 				{
 					momentum.put(id, (mid - h.peekFirst()) / (double) h.peekFirst());
 				}
-				quotes.put(id, new long[]{low + 1, high - 1, vol * 12});
-				if (low < 100 || vol < 30 || !fresh)
+				// SANITY CAP before anything downstream sees it: the coached sell
+				// side is min(book high, 3x the low side). On a healthy item the cap
+				// never binds; on a trap item it is the difference between "rebuy @
+				// 45,080" and a number a human would actually pay.
+				final long cappedSell = Math.min(high - 1L, (long) (low * MAX_QUOTE_MULT));
+				books.put(id, new long[]{low, high, vol, highT});
+				quotes.put(id, new long[]{low + 1, Math.max(low + 1, cappedSell), vol * 12});
+				if (trapBook(low, high, vol))
+				{
+					trapItems.add(id);
+				}
+				else
+				{
+					trapItems.remove(id);
+				}
+				if (low < 100 || vol < THIN_VOL_5M || !fresh)
 				{
 					continue;
 				}
 				final int buyAt = low + 1;
-				final int sellAt = high - 1;
+				final int sellAt = (int) Math.max(buyAt, cappedSell);
 				final int net = sellAt - geTax(sellAt) - buyAt;
 				// ROI over 30% on a liquid item = stale outlier price, not free money
 				if (net <= 0 || net * 100.0 / buyAt > 30)

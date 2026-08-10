@@ -25,6 +25,7 @@ public class GeSlotStampOverlay extends Overlay
 	private static final Color KEEP = new Color(60, 200, 110);
 	private static final Color MOVE = new Color(255, 170, 60);
 	private static final Color ABORT = new Color(255, 80, 80);
+	private static final Color TRAP = new Color(190, 140, 255);
 
 	private final Client client;
 	private final RuneAIConfig config;
@@ -93,7 +94,18 @@ public class GeSlotStampOverlay extends Overlay
 			// a stalled offer at the quote isn't clearing — the reprice must step
 			// DEEPER into the spread, never re-suggest the same number
 			final long spreadStep = Math.max(1, (high - low) / 4);
-			if (buying)
+			if (config.trapGuard() && flips.isTrap(o.getItemId()))
+			{
+				// One-sided book: the only recent high print is a whale overpaying
+				// into an empty market. Every reprice target derived from it is
+				// fiction, so quote no target at all — say what the item is worth
+				// and let the offer sit.
+				label = buying
+					? "THIN BOOK · worth ~" + fmt(low) + " · don't chase"
+					: "THIN BOOK · patience order · hold";
+				c = TRAP;
+			}
+			else if (buying)
 			{
 				final long margin = (q[1] - FlipService.geTax((int) q[1])) - o.getPrice();
 				// most a buy can pay and still net 1gp after tax on the sell side

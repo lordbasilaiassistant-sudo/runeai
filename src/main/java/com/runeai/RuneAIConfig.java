@@ -138,6 +138,16 @@ public interface RuneAIConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "trapGuard",
+		name = "Thin-book trap guard",
+		description = "On illiquid items whose only recent high print is a whale overpay, mute reprice coaching instead of quoting the whale's price back at you"
+	)
+	default boolean trapGuard()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "recordTicks",
 		name = "Record tick vectors",
 		description = "Write a fixed-shape state record every game tick to .runelite/runeai/ticks-*.jsonl — NN training data (restart plugin to apply)"

@@ -133,8 +133,10 @@ public class GeFlipOverlay extends Overlay
 			String plan = "";
 			if (buying && q != null)
 			{
-				final long profit = (q[1] - FlipService.geTax((int) q[1]) - o.getPrice()) * o.getTotalQuantity();
-				plan = "→+" + fmtK(profit);
+				// a trap item's "profit" is the whale print times quantity — fiction
+				plan = config.trapGuard() && flips.isTrap(o.getItemId())
+					? "→thin book"
+					: "→+" + fmtK((q[1] - FlipService.geTax((int) q[1]) - o.getPrice()) * o.getTotalQuantity());
 			}
 			else if (!buying)
 			{
@@ -342,6 +344,26 @@ public class GeFlipOverlay extends Overlay
 			return new Dimension(W, h);
 		}
 		final long buyAt = q[0], sellAt = q[1], volHr = q[2];
+		if (config.trapGuard() && flips.isTrap(itemId))
+		{
+			// The spread here is one whale's print against an empty book. Showing a
+			// "margin" would be inventing a counterparty that does not exist.
+			final long[] book = flips.bookFor(itemId);
+			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 15));
+			g.setColor(new Color(190, 140, 255));
+			g.drawString("THIN BOOK — no real spread", 10, 50);
+			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 13));
+			g.setColor(Color.LIGHT_GRAY);
+			if (book != null)
+			{
+				g.drawString(String.format("sellers accept ~%,d · one buyer paid %,d", book[0], book[1]), 10, 74);
+			}
+			g.drawString(String.format("~%,d traded/hr — nobody is on the other side", volHr), 10, 96);
+			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 15));
+			g.setColor(GOLD);
+			g.drawString("patience order only, never a flip", 10, 122);
+			return new Dimension(W, h);
+		}
 		final int net = (int) (sellAt - FlipService.geTax((int) sellAt) - buyAt);
 		final int limit = flips.limitFor(itemId);
 		final long budget = flips.getBudget();
