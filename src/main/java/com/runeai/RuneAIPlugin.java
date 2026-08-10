@@ -132,6 +132,7 @@ public class RuneAIPlugin extends Plugin
 	private int sugFills, sugCancels;
 	private long unitsBought, unitsSold;
 	private long firstOfferMs;
+	private long lastFlipScanLogMs;
 
 	// ---- TRADER: the flipping skill. profit gp -> xp on the real OSRS curve;
 	// each level raises the max item value you can flip (lvl 99 ~ max cash play)
@@ -561,6 +562,26 @@ public class RuneAIPlugin extends Plugin
 			final boolean membersW = client.getWorldType().contains(net.runelite.api.WorldType.MEMBERS);
 			flipService.setContext(coins, !membersW);
 			flipService.setTraderTier(traderLevel, traderMaxPrice(traderLevel));
+			// log the scan itself: call -> outcome training needs what was
+			// suggested and when, including the calls the player ignored
+			if (System.currentTimeMillis() - lastFlipScanLogMs > 5 * 60_000)
+			{
+				lastFlipScanLogMs = System.currentTimeMillis();
+				final List<Map<String, Object>> sugg = new ArrayList<>();
+				for (FlipService.Flip f : flipService.getTopFlips())
+				{
+					final Map<String, Object> sd = m();
+					sd.put("id", f.getItemId());
+					sd.put("buy", f.getBuyAt());
+					sd.put("sell", f.getSellAt());
+					sd.put("volHr", f.getUnitsHr() * 20);
+					sugg.add(sd);
+				}
+				final Map<String, Object> d = m();
+				d.put("suggestions", sugg);
+				d.put("budget", coins);
+				emit("flipScan", d);
+			}
 			geFlipOverlay.setTrader(traderLevel,
 				traderLevel < 99 ? (traderXp - TRADER_XP[traderLevel - 1])
 					/ Math.max(1.0, TRADER_XP[traderLevel] - TRADER_XP[traderLevel - 1]) : 1.0);
