@@ -4,7 +4,14 @@ Long-horizon progression: a greedy policy plays the simulated account in
 OSRS accounts are a dependency DAG, not a level grind: barrows gloves,
 fire cape, Piety and friends gate real power behind quests, diaries and
 challenge fights the agent must actually win in the Monte Carlo engine.
+
+A run is a SAMPLE, not a forecast. Three sources of spread, all seeded:
+play hours per day (a real account is not logged in 24/7), drop-table luck
+per block, and epsilon-greedy exploration so the policy occasionally takes
+the second-best option the way a human does.
 """
+import math
+import random
 from dataclasses import dataclass
 
 from osrs_math import level_for_xp, xp_for_level
@@ -13,11 +20,33 @@ from engine import PlayerState, combat_rates, boss_fight_mc, boss_fight_cached
 from unlocks import UNLOCKS, TRIAL_BOSSES, available, blocking_skill
 
 BLOCK_H = 6.0
+# A calendar day is not 24 playable hours. 6h/day is an engaged-but-real player;
+# the old 24/7 assumption inflated absolute pace by 4x (relative ordering of
+# strategies was unaffected, which is why it survived so long unnoticed).
+HOURS_PER_DAY = 6.0
+# Drop tables are heavy-tailed: mean-1 lognormal noise per block so a population
+# shows the gap between a dry account and a lucky one instead of one path.
+LUCK_SIGMA = 0.45
+# ...but per-block noise averages away over a few hundred blocks. What actually
+# keeps two identical accounts apart after a year is the RARE slice of the drop
+# table, which arrives in lumps. Modeled as compound Poisson, mean-preserving so
+# it does not change expected gp — only its spread.
+# VERIFY: both knobs are uncalibrated order-of-magnitude guesses, not wiki
+# figures. The plugin's recorded loot corpus is what should set them.
+RARE_SHARE = 0.35    # share of drop-table gp that arrives as rare lumps
+RARE_PER_H = 0.01    # rare events per hour camped (~1 per 100h)
+# How often the policy takes something other than its argmax choice.
+EPSILON = 0.05
 # GE flipping: gp/hr scales with deployable capital until liquidity caps it.
-# ROI/hr + cap calibrated from live flip_scan medians (see sim/market.py --flips).
+# Caps = median top-20 gp/hr from live flip_scan (see sim/market.py --flips),
+# re-measured 2026-08-10 once the members flag was actually applied: the F2P cap
+# had been calibrated on a universe full of members items and was ~10x too high.
+#   whole market (members account trades everything): 107,475 gp/hr
+#   F2P-tradeable only:                                11,574 gp/hr
+# Single snapshot, and GE margins move — re-measure before leaning on the pace.
 FLIP_ROI_HR = 0.015
-FLIP_CAP_HR = 350_000
-FLIP_CAP_HR_F2P = 120_000
+FLIP_CAP_HR = 107_000
+FLIP_CAP_HR_F2P = 11_500
 QUEST_SKILL_XP_HR = 30000   # generic "train an odd skill for a quest gate"
 QUEST_SKILL_GP_HR = -5000
 
@@ -31,6 +60,35 @@ class SimLog:
     levels: str
     members: bool
     clog: int
+
+
+def drop_luck(rng, sigma):
+    """Mean-1 multiplier on drop-derived income for one block."""
+    if sigma <= 0:
+        return 1.0
+    return rng.lognormvariate(-sigma * sigma / 2, sigma)
+
+
+def _poisson(rng, lam):
+    """Knuth, fine at the tiny lambdas a 6h block produces."""
+    target, k, p = math.exp(-lam), 0, 1.0
+    while True:
+        p *= rng.random()
+        if p <= target:
+            return k
+        k += 1
+
+
+def drop_income(rng, gp_hr, hours, sigma):
+    """gp from one block of drop-table income: a smooth part that wobbles, plus
+    rare lumps that don't. Expected value is unchanged — only the spread."""
+    if gp_hr <= 0:
+        return gp_hr * hours
+    smooth = gp_hr * (1 - RARE_SHARE) * hours * drop_luck(rng, sigma)
+    if RARE_PER_H <= 0 or RARE_SHARE <= 0:
+        return smooth
+    rare_value = gp_hr * RARE_SHARE / RARE_PER_H     # mean-preserving lump size
+    return smooth + _poisson(rng, RARE_PER_H * hours) * rare_value
 
 
 def best_food(p):
@@ -101,7 +159,12 @@ def apply_grants(p, grants, note):
         p.pray_str_mult = max(p.pray_str_mult, grants["prayer_str_mult"])
 
 
-def run(start: dict, days: int = 60, verbose=True, ironman: bool = False):
+def run(start: dict, days: int = 60, verbose=True, ironman: bool = False,
+        hours_per_day: float = HOURS_PER_DAY, seed=None,
+        epsilon: float = EPSILON, luck_sigma: float = LUCK_SIGMA):
+    rng = random.Random(seed)
+    if seed is not None:
+        random.seed(seed)   # engine.boss_fight_mc draws from the module RNG
     skills = dict(start["skills"])
     xp = {k: xp_for_level(v) for k, v in skills.items()}
     p = PlayerState(
@@ -120,11 +183,11 @@ def run(start: dict, days: int = 60, verbose=True, ironman: bool = False):
     hours = 0.0
 
     def note(msg):
-        milestones.append(f"day {hours/24:5.1f}: {msg}")
+        milestones.append(f"day {hours/hours_per_day:5.1f}: {msg}")
         if verbose:
             print(f"  ** {msg}")
 
-    while hours < days * 24:
+    while hours < days * hours_per_day:
         p.food = best_food(p)
 
         # 1. bond
@@ -159,10 +222,10 @@ def run(start: dict, days: int = 60, verbose=True, ironman: bool = False):
                         note(f"SHELVED {trial} after {kc} attempts (win {r['win_rate']:.0%}) — needs better gear/stats")
                         continue
                     # practice attempts: burn a block learning the fight
-                    pvm_kc[trial] = kc + 8
+                    pvm_kc[trial] = kc + rng.randint(6, 10)
                     hours += BLOCK_H
                     p.gp -= 40_000  # supplies for wipes
-                    log.append(SimLog(hours / 24, p.gp, f"practicing {trial} (kc {kc})",
+                    log.append(SimLog(hours / hours_per_day, p.gp, f"practicing {trial} (kc {kc})",
                                       -7000, f"{skills['Attack']}/{skills['Strength']}/{skills['Defence']}",
                                       p.members, clog))
                     continue
@@ -200,36 +263,52 @@ def run(start: dict, days: int = 60, verbose=True, ironman: bool = False):
         # 3b. progression skill gate (quest reqs like Cooking 70, Prayer 70)
         gate = blocking_skill(done, skills, p.members)
 
-        # 4. choose the block's activity
+        # 4. choose the block's activity. `src` tags where the gp comes from, so
+        # only drop-table income gets drop-table variance.
         cam_gp, cam_xp = pick_combat(p)
         sk = pick_skilling(p, skills)
         if train_target and cam_xp:
-            act, gp_hr, xp_hr, gain = (f"train {train_target} @ {cam_xp['name']}",
-                                       cam_xp["gp_hr"], cam_xp["xp_hr"], train_target)
+            act, gp_hr, xp_hr, gain, src = (f"train {train_target} @ {cam_xp['name']}",
+                                            cam_xp["gp_hr"], cam_xp["xp_hr"], train_target, "drop")
         elif gate and gate[0] in ("Attack", "Strength", "Defence", "Hitpoints", "Ranged") and cam_xp:
-            act, gp_hr, xp_hr, gain = (f"train {gate[0]} for {gate[2]} @ {cam_xp['name']}",
-                                       cam_xp["gp_hr"], cam_xp["xp_hr"], gate[0])
+            act, gp_hr, xp_hr, gain, src = (f"train {gate[0]} for {gate[2]} @ {cam_xp['name']}",
+                                            cam_xp["gp_hr"], cam_xp["xp_hr"], gate[0], "drop")
         elif gate:
             sk_t = pick_skilling(p, skills, target_skill=gate[0])
             if sk_t:
-                act, gp_hr, xp_hr, gain = (f"{sk_t['name']} for {gate[2]}",
-                                           sk_t["gp_hr"], sk_t["xp_hr"], gate[0])
+                act, gp_hr, xp_hr, gain, src = (f"{sk_t['name']} for {gate[2]}",
+                                                sk_t["gp_hr"], sk_t["xp_hr"], gate[0], "skill")
             else:
-                act, gp_hr, xp_hr, gain = (f"quest-skill {gate[0]} for {gate[2]}",
-                                           QUEST_SKILL_GP_HR, QUEST_SKILL_XP_HR, gate[0])
-        elif (flip_hr := min(p.gp * FLIP_ROI_HR,
-                             FLIP_CAP_HR if p.members else FLIP_CAP_HR_F2P)) > max(
-                cam_gp["gp_hr"] if cam_gp else 0, sk["gp_hr"] if sk else 0):
-            act, gp_hr, xp_hr, gain = "GE flipping", flip_hr, 0, None
-        elif cam_gp and (not sk or cam_gp["gp_hr"] >= sk["gp_hr"]):
-            act, gp_hr, xp_hr = f"camp {cam_gp['name']}", cam_gp["gp_hr"], cam_gp["xp_hr"]
-            gain = min(("Attack", "Strength", "Defence"), key=lambda s: skills[s])
-        elif sk:
-            act, gp_hr, xp_hr, gain = sk["name"], sk["gp_hr"], sk["xp_hr"], sk["skill"]
+                act, gp_hr, xp_hr, gain, src = (f"quest-skill {gate[0]} for {gate[2]}",
+                                                QUEST_SKILL_GP_HR, QUEST_SKILL_XP_HR, gate[0], "skill")
         else:
-            act, gp_hr, xp_hr, gain = "idle", 0, 0, None
+            # free choice: rank the money options, then explore with prob epsilon
+            options = []
+            if not p.ironman:      # irons have no GE at all
+                options.append(("GE flipping",
+                                min(p.gp * FLIP_ROI_HR,
+                                    FLIP_CAP_HR if p.members else FLIP_CAP_HR_F2P),
+                                0, None, "flip"))
+            if cam_gp:
+                options.append((f"camp {cam_gp['name']}", cam_gp["gp_hr"], cam_gp["xp_hr"],
+                                min(("Attack", "Strength", "Defence"), key=lambda s: skills[s]),
+                                "drop"))
+            if sk:
+                options.append((sk["name"], sk["gp_hr"], sk["xp_hr"], sk["skill"], "skill"))
+            if not options:
+                options = [("idle", 0, 0, None, "skill")]
+            if len(options) > 1 and rng.random() < epsilon:
+                act, gp_hr, xp_hr, gain, src = rng.choice(options)
+            else:
+                act, gp_hr, xp_hr, gain, src = max(options, key=lambda o: o[1])
 
-        p.gp += int(gp_hr * BLOCK_H)
+        if src == "drop":
+            earned = drop_income(rng, gp_hr, BLOCK_H, luck_sigma)
+        elif src == "flip" and gp_hr > 0:
+            earned = gp_hr * BLOCK_H * drop_luck(rng, luck_sigma * 0.4)  # margins wobble
+        else:
+            earned = gp_hr * BLOCK_H
+        p.gp += int(earned)
         if gain:
             xp.setdefault(gain, xp_for_level(skills.get(gain, 1)))
             xp[gain] += int(xp_hr * BLOCK_H)
@@ -252,7 +331,7 @@ def run(start: dict, days: int = 60, verbose=True, ironman: bool = False):
                     p.hp = nh
 
         hours += BLOCK_H
-        log.append(SimLog(hours / 24, p.gp, act, int(gp_hr),
+        log.append(SimLog(hours / hours_per_day, p.gp, act, int(gp_hr),
                           f"{skills['Attack']}/{skills['Strength']}/{skills['Defence']}",
                           p.members, clog))
 

@@ -6,7 +6,12 @@ iron/regular) and reports the distributions that matter: days to bond,
 days to barrows gloves, final worth, final gp/hr — plus actual measured
 lifetimes/second so the throughput claim is a number, not a vibe.
 
+Every lifetime gets its OWN seed, so the fleet is a real distribution
+(drop luck + exploration diverge the paths) rather than the same run
+printed N times. Re-running with the same --seed reproduces the fleet.
+
   py sim/population.py --n 200 --days 365
+  py sim/population.py --n 200 --days 365 --hours 3   # part-time players
 """
 import argparse
 import statistics
@@ -15,7 +20,7 @@ import time
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-from progress import run
+from progress import run, HOURS_PER_DAY, EPSILON
 
 ARCHETYPES = {
     "fresh-regular": dict(
@@ -31,11 +36,13 @@ ARCHETYPES = {
 ARCHETYPES["fresh-iron"] = ARCHETYPES["fresh-regular"]
 
 
-def one_lifetime(arch: str, days: int):
+def one_lifetime(arch: str, days: int, seed: int, hours: float, epsilon: float):
     start = ARCHETYPES[arch]
     iron = arch.endswith("iron")
     p, skills, log, milestones, done, clog = run(start, days=days,
-                                                 verbose=False, ironman=iron)
+                                                 verbose=False, ironman=iron,
+                                                 hours_per_day=hours, seed=seed,
+                                                 epsilon=epsilon)
     def day_of(needle):
         for m in milestones:
             if needle in m:
@@ -60,20 +67,32 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=100, help="lifetimes per archetype")
     ap.add_argument("--days", type=int, default=365)
+    ap.add_argument("--hours", type=float, default=HOURS_PER_DAY,
+                    help="playable hours per calendar day (default %(default)s)")
+    ap.add_argument("--epsilon", type=float, default=EPSILON,
+                    help="chance a block explores instead of taking the best option")
+    ap.add_argument("--seed", type=int, default=1, help="fleet seed — reproduces the whole run")
     args = ap.parse_args()
 
+    print(f"fleet: {args.hours}h/day played, exploration {args.epsilon:.0%}, seed {args.seed}")
     grand_total, t0 = 0, time.time()
-    for arch in ARCHETYPES:
+    for ai, arch in enumerate(ARCHETYPES):
         t1 = time.time()
-        results = [one_lifetime(arch, args.days) for _ in range(args.n)]
+        results = [one_lifetime(arch, args.days, args.seed * 1_000_000 + ai * 10_000 + i,
+                                args.hours, args.epsilon)
+                   for i in range(args.n)]
         dt = time.time() - t1
         grand_total += args.n
-        years = args.n * args.days / 365.25
+        years = args.n * args.days * args.hours / (365.25 * 24)
         print(f"\n=== {arch} — {args.n} lifetimes x {args.days} days "
-              f"({years:,.0f} account-years in {dt:.1f}s = {years/dt:,.0f} years/sec) ===")
+              f"({years:,.1f} account-years of PLAYED time in {dt:.1f}s "
+              f"= {years/dt:,.0f} played-years/sec) ===")
 
         worths = [r["worth"] for r in results]
+        uniq = len(set(worths))
         print(f"  final worth   p10 {pct(worths, .1):>13,}   median {pct(worths, .5):>13,}   p90 {pct(worths, .9):>13,}")
+        print(f"                spread p90/p10 x{pct(worths, .9)/max(1, pct(worths, .1)):.2f}   "
+              f"{uniq}/{args.n} distinct outcomes")
         bond = [r["bond_day"] for r in results if r["bond_day"]]
         if bond:
             print(f"  bond bought   {len(bond)}/{args.n} accounts, median day {statistics.median(bond):.1f}")
@@ -86,8 +105,9 @@ def main():
 
     dt = time.time() - t0
     total_years = grand_total * args.days / 365.25
-    print(f"\n=== TOTAL: {grand_total} lifetimes, {total_years:,.0f} simulated account-years "
-          f"in {dt:.1f}s ({total_years/dt:,.0f} years/sec) ===")
+    played_years = total_years * args.hours / 24
+    print(f"\n=== TOTAL: {grand_total} lifetimes, {total_years:,.0f} calendar account-years "
+          f"({played_years:,.1f} played) in {dt:.1f}s ({total_years/dt:,.0f} years/sec) ===")
     print(f"    at this rate, 1,000,000 account-years ≈ {1_000_000/(total_years/dt)/60:.1f} minutes")
 
 

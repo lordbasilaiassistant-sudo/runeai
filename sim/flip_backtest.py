@@ -14,6 +14,7 @@ always fill within the hour). Treat results as an upper bound on pace,
 not a promise. Past data, no game updates, no competition from you.
 
   py sim/flip_backtest.py --start 10000
+  py sim/flip_backtest.py --start 10000 --universe f2p   # free account's book
 """
 import argparse
 import json
@@ -28,7 +29,8 @@ import numpy as np
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ge_rl_trainer import Net, features, ge_tax
+from ge_rl_trainer import Net, features, ge_tax, load_net
+from market import fetch_mapping, tradeable_ids
 
 API = "https://prices.runescape.wiki/api/v1/osrs"
 UA = {"User-Agent": "RuneAI backtest (github.com/lordbasilaiassistant-sudo/runeai)"}
@@ -42,14 +44,7 @@ def fetch(path):
 
 
 def load_brain():
-    b = json.load(open(BRAIN, encoding="utf-8"))["net"]
-    net = Net(np.random.default_rng(0))
-    net.W1 = np.array(b["W1"])
-    net.b1 = np.array(b["b1"])
-    net.W2 = np.array(b["W2"])
-    net.b2 = np.array(b["b2"])
-    net.item_bias = {int(k): v for k, v in b.get("item_bias", {}).items()}
-    return net
+    return load_net(BRAIN)
 
 
 def main():
@@ -57,15 +52,22 @@ def main():
     ap.add_argument("--start", type=int, default=10_000)
     ap.add_argument("--items", type=int, default=300)
     ap.add_argument("--slots", type=int, default=3)
+    ap.add_argument("--universe", choices=("all", "f2p"), default="all",
+                    help="f2p = only items a free account can trade (members flag "
+                         "from the wiki mapping); all = whole market")
     args = ap.parse_args()
 
     net = load_brain()
     print("selecting liquid items + limits…")
+    raw_map = fetch_mapping()
+    allowed = tradeable_ids(raw_map, args.universe)
     five = fetch("/5m")["data"]
     vols = sorted(((v.get("highPriceVolume", 0) or 0) + (v.get("lowPriceVolume", 0) or 0), int(k))
-                  for k, v in five.items())
+                  for k, v in five.items() if int(k) in allowed)
     ids = [iid for _, iid in vols[::-1][:args.items]]
-    mapping = {m["id"]: (m.get("limit") or 100) for m in fetch("/mapping")}
+    mapping = {iid: (m.get("limit") or 100) for iid, m in raw_map.items()}
+    print(f"  universe: {args.universe} "
+          f"({len(allowed):,} of {len(raw_map):,} mapped items tradeable)")
 
     print(f"pulling 1h history for {len(ids)} items…")
     hist = {}

@@ -28,6 +28,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ge_rl_trainer import Net, features, ge_tax
 from flip_backtest import fetch, load_brain
+from market import fetch_mapping, tradeable_ids
 
 CHAMP = os.path.expanduser("~/.runelite/runeai/ge-champion.json")
 
@@ -38,12 +39,14 @@ RANGES = dict(roi_floor=(0.0, 0.05), mom_buy_cut=(-0.05, 0.0),
               conc=(0.15, 0.9), hold_bars=(1, 3))
 
 
-def pull_history(n_items):
+def pull_history(n_items, universe="all"):
+    raw_map = fetch_mapping()
+    allowed = tradeable_ids(raw_map, universe)
     five = fetch("/5m")["data"]
     vols = sorted(((v.get("highPriceVolume", 0) or 0) + (v.get("lowPriceVolume", 0) or 0), int(k))
-                  for k, v in five.items())
+                  for k, v in five.items() if int(k) in allowed)
     ids = [iid for _, iid in vols[::-1][:n_items]]
-    mapping = {m["id"]: (m.get("limit") or 100) for m in fetch("/mapping")}
+    mapping = {iid: (m.get("limit") or 100) for iid, m in raw_map.items()}
     hist = {}
     for k, iid in enumerate(ids):
         try:
@@ -124,11 +127,13 @@ def main():
     ap.add_argument("--pop", type=int, default=14)
     ap.add_argument("--start", type=int, default=200_000)
     ap.add_argument("--items", type=int, default=250)
+    ap.add_argument("--universe", choices=("all", "f2p"), default="all",
+                    help="f2p = evolve only on items a free account can trade")
     args = ap.parse_args()
 
     net = load_brain()
     print("pulling league arena (history)…")
-    hist, stamps, mapping = pull_history(args.items)
+    hist, stamps, mapping = pull_history(args.items, args.universe)
     cut = int(len(stamps) * 0.7)
     trainW = stamps[:cut]      # the league evolves here
     testW = stamps[cut:]       # the crown is defended HERE (never seen)

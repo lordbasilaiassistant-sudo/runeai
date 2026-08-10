@@ -4,16 +4,19 @@ RuneAI progression simulator — watch the agent play a simulated account.
   py sim/run_sim.py                 # Anthony's real account, 90 sim days
   py sim/run_sim.py --days 30
   py sim/run_sim.py --fresh         # level-3-ish fresh account instead
+  py sim/run_sim.py --hours 3       # 3 playable hours a day instead of 6
+  py sim/run_sim.py --seed 12       # a different roll of the same account
 
 Seeded from the real snapshot stats. All world numbers are wiki-approx
-pending calibration against the plugin's recorded corpus.
+pending calibration against the plugin's recorded corpus. One run is ONE
+SAMPLE of a stochastic process — use population.py for the distribution.
 """
 import argparse
 import sys
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-from progress import run, boss_report
+from progress import run, boss_report, HOURS_PER_DAY, EPSILON
 
 ANTHONY = dict(
     skills=dict(Attack=73, Strength=71, Defence=72, Hitpoints=77, Prayer=56, Ranged=78,
@@ -51,13 +54,22 @@ def main():
     ap.add_argument("--fresh", action="store_true")
     ap.add_argument("--iron", action="store_true", help="ironman: no GE buying")
     ap.add_argument("--p2p-preview", action="store_true", help="boss table as if membered")
+    ap.add_argument("--hours", type=float, default=HOURS_PER_DAY,
+                    help="playable hours per calendar day (default %(default)s)")
+    ap.add_argument("--seed", type=int, default=1, help="RNG seed — same seed, same run")
+    ap.add_argument("--epsilon", type=float, default=EPSILON,
+                    help="chance the policy explores instead of taking its best option")
     args = ap.parse_args()
 
     start = FRESH if args.fresh else ANTHONY
     who = "fresh account" if args.fresh else "Anthony's account (real stats)"
-    print(f"=== SIMULATING {args.days} DAYS OF PLAY — {who} ===\n")
+    print(f"=== SIMULATING {args.days} DAYS OF PLAY — {who} ===")
+    print(f"    {args.hours}h/day played, seed {args.seed}, exploration {args.epsilon:.0%} "
+          f"({args.days * args.hours:,.0f} played hours total)\n")
 
-    p, skills, log, milestones, done, clog = run(start, days=args.days, ironman=args.iron)
+    p, skills, log, milestones, done, clog = run(start, days=args.days, ironman=args.iron,
+                                                 hours_per_day=args.hours, seed=args.seed,
+                                                 epsilon=args.epsilon)
 
     print("\n=== MILESTONES ===")
     for m in milestones:
