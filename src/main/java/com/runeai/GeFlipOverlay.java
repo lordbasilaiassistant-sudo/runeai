@@ -12,6 +12,8 @@ import javax.inject.Inject;
 import net.runelite.api.Client;
 import net.runelite.api.InventoryID;
 import net.runelite.api.Item;
+import net.runelite.api.GrandExchangeOffer;
+import net.runelite.api.GrandExchangeOfferState;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.ui.overlay.Overlay;
@@ -295,10 +297,10 @@ public class GeFlipOverlay extends Overlay
 					}
 				}
 			}
-			for (net.runelite.api.GrandExchangeOffer of : client.getGrandExchangeOffers())
+			for (GrandExchangeOffer of : client.getGrandExchangeOffers())
 			{
 				if (of != null && of.getItemId() == itemId
-					&& (of.getState() == net.runelite.api.GrandExchangeOfferState.SELLING))
+					&& (of.getState() == GrandExchangeOfferState.SELLING))
 				{
 					unsold += of.getTotalQuantity() - of.getQuantitySold();
 				}
