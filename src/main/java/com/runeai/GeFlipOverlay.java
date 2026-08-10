@@ -10,6 +10,9 @@ import java.util.ArrayList;
 import java.util.List;
 import javax.inject.Inject;
 import net.runelite.api.Client;
+import net.runelite.api.InventoryID;
+import net.runelite.api.Item;
+import net.runelite.api.ItemContainer;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
@@ -37,6 +40,14 @@ public class GeFlipOverlay extends Overlay
 	private volatile long realized;
 	private volatile int buys, sells;
 	private volatile long sessionMin;
+	private volatile int traderLvl = 1;
+	private volatile double traderPct;
+
+	void setTrader(int lvl, double pct)
+	{
+		traderLvl = lvl;
+		traderPct = pct;
+	}
 
 	void setStats(int active, int total, long medBuy, long medSell, int fills, int cancels,
 		long gpHr, long realizedPnl, int buyCount, int sellCount, long sessMin)
@@ -150,7 +161,7 @@ public class GeFlipOverlay extends Overlay
 		final int freeSlots = Math.max(0, totalSlots - activeSlots);
 		final int rows = freeSlots == 0 ? 0 : Math.min(3, top.size());
 		final int posH = positions.isEmpty() ? 0 : 20 + positions.size() * 34;
-		final int h = 66 + posH + (rows > 0 ? rows * 36 : 0) + 40;
+		final int h = 66 + posH + (rows > 0 ? rows * 36 : 0) + 58;
 
 		g.setColor(new Color(12, 12, 18, 235));
 		g.fillRoundRect(0, 0, W, h, 10, 10);
@@ -227,6 +238,10 @@ public class GeFlipOverlay extends Overlay
 		g.setColor(Color.LIGHT_GRAY);
 		g.drawString(String.format("%d bought · %d sold · calls %d✓/%d✗ · %dm",
 			buys, sells, sugFills, sugCancels, sessionMin), 10, y + 27);
+		g.setFont(g.getFont().deriveFont(Font.BOLD, 13f));
+		g.setColor(new Color(140, 200, 255));
+		g.drawString(String.format("Trader lvl %d · %.0f%% to %d", traderLvl,
+			traderPct * 100, Math.min(99, traderLvl + 1)), 10, y + 43);
 		return new Dimension(W, h);
 	}
 
@@ -265,11 +280,10 @@ public class GeFlipOverlay extends Overlay
 		{
 			// selling: dump the full stack you hold at the undercut price
 			long held = 0;
-			final net.runelite.api.ItemContainer inv =
-				client.getItemContainer(net.runelite.api.InventoryID.INVENTORY);
+			final ItemContainer inv = client.getItemContainer(InventoryID.INVENTORY);
 			if (inv != null)
 			{
-				for (net.runelite.api.Item it : inv.getItems())
+				for (Item it : inv.getItems())
 				{
 					if (it != null && it.getId() > 0
 						&& itemManager.canonicalize(it.getId()) == itemId)

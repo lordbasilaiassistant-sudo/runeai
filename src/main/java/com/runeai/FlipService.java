@@ -44,6 +44,14 @@ class FlipService
 	private final AtomicLong lastRefresh = new AtomicLong();
 	private volatile long budget = -1;       // carried coins; -1 = unknown
 	private volatile boolean f2pOnly;
+	private volatile long traderMaxPrice = Long.MAX_VALUE;
+	private volatile int traderLevel = 1;
+
+	void setTraderTier(int level, long maxPrice)
+	{
+		traderLevel = level;
+		traderMaxPrice = maxPrice;
+	}
 
 	@Value
 	static class Flip
@@ -88,6 +96,10 @@ class FlipService
 			if (b >= 0 && f.getBuyAt() > b)
 			{
 				continue;
+			}
+			if (f.getBuyAt() > traderMaxPrice)
+			{
+				continue; // above this trader level's tier — level up to unlock
 			}
 			out.add(f);
 		}

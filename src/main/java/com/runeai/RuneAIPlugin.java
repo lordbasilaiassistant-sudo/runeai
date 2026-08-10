@@ -132,6 +132,40 @@ public class RuneAIPlugin extends Plugin
 	private long unitsBought, unitsSold;
 	private long firstOfferMs;
 
+	// ---- TRADER: the flipping skill. profit gp -> xp on the real OSRS curve;
+	// each level raises the max item value you can flip (lvl 99 ~ max cash play)
+	private static final int[] TRADER_XP = new int[100];
+	static
+	{
+		int acc = 0;
+		for (int n = 1; n < 100; n++)
+		{
+			acc += (int) Math.floor(n + 300 * Math.pow(2, n / 7.0));
+			TRADER_XP[n] = acc / 4;
+		}
+	}
+	private double traderXp;
+	private int traderLevel = 1;
+
+	static int traderLevelFor(double xp)
+	{
+		int lvl = 1;
+		for (int l = 2; l < 100; l++)
+		{
+			if (xp >= TRADER_XP[l - 1])
+			{
+				lvl = l;
+			}
+		}
+		return lvl;
+	}
+
+	/** Max item price unlocked at a trader level — gp stack and skill grow together. */
+	static long traderMaxPrice(int level)
+	{
+		return (long) (500 * Math.pow(1.135, level));
+	}
+
 
 	private Gson prettyGson;
 	private RuneAIPanel panel;
@@ -226,6 +260,7 @@ public class RuneAIPlugin extends Plugin
 			.panel(panel)
 			.build();
 		loadFlipBasis();
+		loadTrader();
 		clientToolbar.addNavigation(navButton);
 		overlayManager.add(overlay);
 		overlayManager.add(mascot);
@@ -396,9 +431,25 @@ public class RuneAIPlugin extends Plugin
 					// only on taxable items — never trust the API field's semantics
 					final long gross = (long) dQty * o.getPrice();
 					final long tax = (long) FlipService.geTax(o.getPrice()) * dQty;
-					flipRealized += gross - tax - cost;
+					final long profit = gross - tax - cost;
+					flipRealized += profit;
 					unitsSold += dQty;
 					panel.setFlipPnl(flipRealized);
+
+					// TRADER xp: positive profit only, real OSRS curve
+					if (profit > 0)
+					{
+						traderXp += profit * 0.1; // 0.1 xp per gp: 99 = ~130M lifetime profit
+						saveTrader();
+						final int nl = traderLevelFor(traderXp);
+						if (nl > traderLevel)
+						{
+							traderLevel = nl;
+							overlay.setAlert("TRADER level " + nl + "!", client.getTickCount() + 10);
+							voice.play("levelup");
+							mascot.celebrate("Trader level " + nl + "!");
+						}
+					}
 				}
 				tr.lastQty = o.getQuantitySold();
 				tr.lastSpent = o.getSpent();
@@ -496,6 +547,10 @@ public class RuneAIPlugin extends Plugin
 			}
 			final boolean membersW = client.getWorldType().contains(net.runelite.api.WorldType.MEMBERS);
 			flipService.setContext(coins, !membersW);
+			flipService.setTraderTier(traderLevel, traderMaxPrice(traderLevel));
+			geFlipOverlay.setTrader(traderLevel,
+				traderLevel < 99 ? (traderXp - TRADER_XP[traderLevel - 1])
+					/ Math.max(1.0, TRADER_XP[traderLevel] - TRADER_XP[traderLevel - 1]) : 1.0);
 			panel.setFlips(flipService.getTopFlips());
 
 			// slot utilization: an idle slot is wasted throughput
@@ -601,6 +656,38 @@ public class RuneAIPlugin extends Plugin
 		catch (Exception ex)
 		{
 			log.warn("flip basis load failed", ex);
+		}
+	}
+
+	private void loadTrader()
+	{
+		try
+		{
+			final File f = new File(DATA_DIR, "trader.json");
+			if (f.exists())
+			{
+				final Map<?, ?> raw = gson.fromJson(
+					new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8), Map.class);
+				traderXp = ((Number) raw.get("xp")).doubleValue();
+				traderLevel = traderLevelFor(traderXp);
+			}
+		}
+		catch (Exception ex)
+		{
+			log.warn("trader load failed", ex);
+		}
+	}
+
+	private void saveTrader()
+	{
+		try
+		{
+			Files.write(new File(DATA_DIR, "trader.json").toPath(),
+				gson.toJson(Map.of("xp", traderXp)).getBytes(StandardCharsets.UTF_8));
+		}
+		catch (Exception ex)
+		{
+			log.warn("trader save failed", ex);
 		}
 	}
 
