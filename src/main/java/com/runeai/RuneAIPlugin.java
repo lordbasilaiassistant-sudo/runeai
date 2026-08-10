@@ -392,7 +392,11 @@ public class RuneAIPlugin extends Plugin
 						basis[0] -= q;
 						basis[1] -= cost;
 					}
-					flipRealized += dCoins - cost; // sell proceeds minus cost basis
+					// sell − buy − tax, computed explicitly: 2% per item (floored),
+					// only on taxable items — never trust the API field's semantics
+					final long gross = (long) dQty * o.getPrice();
+					final long tax = (long) FlipService.geTax(o.getPrice()) * dQty;
+					flipRealized += gross - tax - cost;
 					unitsSold += dQty;
 					panel.setFlipPnl(flipRealized);
 				}
@@ -439,6 +443,8 @@ public class RuneAIPlugin extends Plugin
 		d.put("qtySold", o.getQuantitySold());
 		d.put("spent", o.getSpent());
 		d.put("suggested", sug);
+		// both accounting views logged so the real coin stack can arbitrate
+		d.put("taxCalc", (long) FlipService.geTax(o.getPrice()) * o.getQuantitySold());
 		if (fillSecs != null)
 		{
 			d.put("fillSecs", fillSecs);
