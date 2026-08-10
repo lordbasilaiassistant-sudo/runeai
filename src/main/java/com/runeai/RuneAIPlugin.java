@@ -1242,13 +1242,9 @@ public class RuneAIPlugin extends Plugin
 		for (FlipService.Anomaly a : found)
 		{
 			final String why = exposure(a.getItemId());
-			if (config.anomalyHeldOnly() && why == null)
-			{
-				continue;
-			}
-			// every fresh dislocation is recorded even when the alert is throttled —
-			// the log is the dataset, the alert is the interruption, and they are
-			// allowed to have different budgets
+			// every fresh dislocation is recorded even when the alert is filtered or
+			// throttled — the log is the dataset, the alert is the interruption, and
+			// they are allowed to have different budgets
 			if (logged++ < 40)
 			{
 				final Map<String, Object> d = m();
@@ -1262,6 +1258,10 @@ public class RuneAIPlugin extends Plugin
 				d.put("spanMins", a.getSpanMins());
 				d.put("exposure", why);
 				emit("anomaly", d);
+			}
+			if (config.anomalyHeldOnly() && why == null)
+			{
+				continue; // logged above; just not worth an interruption
 			}
 			final Long last = lastAnomalyAlertMs.get(a.getItemId());
 			if (last != null && now - last < ANOMALY_RECALL_MS)

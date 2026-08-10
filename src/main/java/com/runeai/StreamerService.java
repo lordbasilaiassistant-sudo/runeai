@@ -531,12 +531,23 @@ class StreamerService
 		final String user = userPrompt(context, reel);
 		final String body = chatBody(gson, config.streamerModel(),
 			systemPrompt(config.streamerPersona()), user);
-		final Request req = new Request.Builder()
-			.url(chatUrl(config.streamerBaseUrl()))
-			.header("Authorization", "Bearer " + config.streamerKey().trim())
-			.header("User-Agent", UA)
-			.post(RequestBody.create(JSON, body))
-			.build();
+		final Request req;
+		try
+		{
+			req = new Request.Builder()
+				.url(chatUrl(config.streamerBaseUrl()))
+				.header("Authorization", "Bearer " + config.streamerKey().trim())
+				.header("User-Agent", UA)
+				.post(RequestBody.create(JSON, body))
+				.build();
+		}
+		catch (IllegalArgumentException bad)
+		{
+			// whatever the player pasted is not a URL; this runs on the client
+			// thread, so say so in the status instead of throwing every interval
+			status = "endpoint is not a valid URL";
+			return;
+		}
 
 		inFlight.set(true);
 		log.debug("streamer prompt:\n{}", user);

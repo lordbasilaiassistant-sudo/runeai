@@ -444,7 +444,7 @@ class FlipService
 		{
 			return 1.0;
 		}
-		final double predNet = predSell - geTax((int) predSell) - buyAt;
+		final double predNet = predSell - geTax(predSell) - buyAt;
 		return Math.max(0.25, Math.min(2.0, predNet / net));
 	}
 
@@ -524,11 +524,17 @@ class FlipService
 
 	static int geTax(int sellPrice)
 	{
+		return (int) geTax((long) sellPrice);
+	}
+
+	/** Long form for callers whose price can exceed int range (brain forecasts). */
+	static long geTax(long sellPrice)
+	{
 		if (sellPrice < 50)
 		{
 			return 0;
 		}
-		return (int) Math.min(sellPrice * 0.02, 5_000_000);
+		return (long) Math.min(sellPrice * 0.02, 5_000_000);
 	}
 
 	void maybeRefresh()
@@ -633,7 +639,8 @@ class FlipService
 				}
 				// PREDICT -> SCORE -> PUNISH: last scan forecast "mid holds";
 				// grade it now, demote items that surprised us (negative reward)
-				final long mid = (high + low) / 2;
+				// long math: high + low overflows int on anything above ~1.07B gp
+				final long mid = ((long) high + low) / 2;
 				final Long pred = predictedMid.get(id);
 				if (pred != null && pred > 0)
 				{
