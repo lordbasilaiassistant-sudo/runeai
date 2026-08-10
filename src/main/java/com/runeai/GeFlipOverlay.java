@@ -140,10 +140,9 @@ public class GeFlipOverlay extends Overlay
 			{
 				plan = "→" + fmtK((long) (o.getPrice() - FlipService.geTax(o.getPrice())) * o.getTotalQuantity());
 			}
-			pos.add(new String[]{String.format("%s %s  %d/%d",
-				buying ? "BUY" : "SELL", trunc(flips.nameFor(o.getItemId()), 16),
-				o.getQuantitySold(), o.getTotalQuantity()),
-				plan, buying ? "b" : "s"});
+			pos.add(new String[]{buying ? "BUY" : "SELL", flips.nameFor(o.getItemId()),
+				String.format("%d/%d  %s", o.getQuantitySold(), o.getTotalQuantity(), plan),
+				buying ? "b" : "s"});
 		}
 
 		final List<FlipService.Flip> top = new ArrayList<>();
@@ -199,10 +198,13 @@ public class GeFlipOverlay extends Overlay
 			{
 				final String[] ps = pos.get(i);
 				g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 13));
-				g.setColor("b".equals(ps[2]) ? new Color(140, 200, 255) : new Color(255, 170, 120));
-				g.drawString(ps[0], 8, y);
+				final int rightW = g.getFontMetrics().stringWidth(ps[2]);
 				g.setColor(new Color(120, 220, 140));
-				g.drawString(ps[1], W - 8 - g.getFontMetrics().stringWidth(ps[1]), y);
+				g.drawString(ps[2], W - 8 - rightW, y);
+				g.setColor("b".equals(ps[3]) ? new Color(140, 200, 255) : new Color(255, 170, 120));
+				// the name gets EVERY pixel the numbers don't need
+				g.drawString(ps[0] + " " + fit(g, ps[1], W - 22 - rightW
+					- g.getFontMetrics().stringWidth(ps[0] + " ")), 8, y);
 				y += 18;
 			}
 		}
@@ -215,15 +217,14 @@ public class GeFlipOverlay extends Overlay
 			for (int i = 0; i < rows; i++)
 			{
 				final FlipService.Flip f = top.get(i);
+				g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 12));
+				final String rest = String.format("%,d  +%d/ea", f.getBuyAt(), f.getNet());
+				final int restW = g.getFontMetrics().stringWidth(rest);
+				g.setColor(GOLD);
+				g.drawString(rest, W - 8 - restW, y);
 				g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 13));
 				g.setColor(Color.WHITE);
-				final String nm = trunc(f.getName(), 17);
-				g.drawString(nm, 8, y);
-				g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 12));
-				g.setColor(GOLD);
-				final String rest = String.format("%,d  +%d/ea",
-					f.getBuyAt(), f.getNet());
-				g.drawString(rest, W - 8 - g.getFontMetrics().stringWidth(rest), y);
+				g.drawString(fit(g, f.getName(), W - 22 - restW), 8, y);
 				y += 18;
 			}
 		}
@@ -280,6 +281,28 @@ public class GeFlipOverlay extends Overlay
 			y += 40;
 		}
 		return new Dimension(W, h);
+	}
+
+	/** Fit a name into a pixel budget: abbreviate first, ellipsize last. */
+	private static String fit(Graphics2D g, String name, int maxPx)
+	{
+		if (g.getFontMetrics().stringWidth(name) <= maxPx)
+		{
+			return name;
+		}
+		String a = name.replace("teleport", "tele").replace("Teleport", "Tele")
+			.replace(" potion", " pot").replace("Extended ", "Ext ")
+			.replace("Haemostatic", "Haemo").replace(" dressing", " drs")
+			.replace("Superior ", "Sup ").replace(" tablet", " tab");
+		if (g.getFontMetrics().stringWidth(a) <= maxPx)
+		{
+			return a;
+		}
+		while (a.length() > 3 && g.getFontMetrics().stringWidth(a + "…") > maxPx)
+		{
+			a = a.substring(0, a.length() - 1);
+		}
+		return a + "…";
 	}
 
 	private static String fmtK(long v)
