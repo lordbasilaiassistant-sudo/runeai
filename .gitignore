@@ -11,3 +11,4 @@ nbproject/
 *.jsonl
 snapshot-*.json
 train/damage_model.json
+__pycache__/
