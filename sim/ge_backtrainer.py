@@ -106,8 +106,16 @@ def main():
     ids_te = [s[3] for s in test]
     mart_te = np.array([s[2] for s in test])
 
+    mart_tr = np.array([s_[2] for s_ in train])
+
     rng = np.random.default_rng(7)
     net = Net(rng)
+    # RESIDUAL LEARNING: the net predicts the CORRECTION to the martingale,
+    # starting at ~zero — it begins AT the baseline and can only earn gains
+    net.W2 *= 0.05
+    net.b2[:] = 0
+    ytr_res = ytr - mart_tr
+    yte_res = yte - mart_te
     order = np.arange(len(ytr))
     B = 256
     for ep in range(args.epochs):
@@ -116,15 +124,15 @@ def main():
         nb = 0
         for s0 in range(0, len(order), B):
             idx = order[s0:s0 + B]
-            mse += net.train(Xtr[idx], ytr[idx],
+            mse += net.train(Xtr[idx], ytr_res[idx],
                              [ids_tr[i] for i in idx], lr=0.02)
             nb += 1
-        # honest out-of-sample check every epoch
-        pte = net.forward(Xte, ids_te)
+        # honest out-of-sample check every epoch (baseline + correction)
+        pte = mart_te + net.forward(Xte, ids_te)
         te = float(np.mean((pte - yte) ** 2))
         print(f"  epoch {ep+1}/{args.epochs}: train MSE {mse/nb:.5f} | TEST MSE {te:.5f}")
 
-    pte = net.forward(Xte, ids_te)
+    pte = mart_te + net.forward(Xte, ids_te)
     net_mse = float(np.mean((pte - yte) ** 2))
     mart_mse = float(np.mean((mart_te - yte) ** 2))
     rel_err = np.abs(np.exp(pte) - np.exp(yte)) / np.exp(yte)
