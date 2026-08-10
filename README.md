@@ -77,7 +77,7 @@ Playback goes through a single-thread speech queue, so lines never overlap — o
 
 ### GE flipping copilot + the TRADER skill
 
-![RuneAI GE flipping: live suggestions, open offers with exit plans, verdict stamps, session P&L and the Trader skill](docs/img/runeai-ge-flipping.png)
+![The full RuneAI client: sidebar with Trade log and Bond fund, GE overlay with open offers and exit plans, verdict stamps on slots, Trader skill progress](docs/img/runeai-full-client.png)
 
 While the Grand Exchange is open, RuneAI becomes a flipping copilot — all in the game window:
 
