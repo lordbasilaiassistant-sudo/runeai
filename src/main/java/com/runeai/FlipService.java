@@ -40,6 +40,7 @@ class FlipService
 	private final Map<Integer, String> names = new ConcurrentHashMap<>();
 	private final Map<Integer, Boolean> membersItem = new ConcurrentHashMap<>();
 	private volatile List<Flip> allFlips = List.of();
+	private final Map<Integer, long[]> quotes = new ConcurrentHashMap<>(); // id -> {buyAt, sellAt, volHr}
 	private final AtomicLong lastRefresh = new AtomicLong();
 	private volatile long budget = -1;       // carried coins; -1 = unknown
 	private volatile boolean f2pOnly;
@@ -106,6 +107,28 @@ class FlipService
 
 	// suggestion attribution: did the user trade what we showed, near our price?
 	private final Map<Integer, long[]> suggested = new ConcurrentHashMap<>(); // id -> {buy, sell, whenMs}
+
+	/** Live quote + qty/profit coaching for ANY item (the offer-setup coach). */
+	long[] quoteFor(int itemId)
+	{
+		return quotes.get(itemId); // {buyAt, sellAt, volHr} or null
+	}
+
+	int limitFor(int itemId)
+	{
+		final int[] l = limits.get(itemId);
+		return l != null ? l[0] : 0;
+	}
+
+	String nameFor(int itemId)
+	{
+		return names.getOrDefault(itemId, "item");
+	}
+
+	long getBudget()
+	{
+		return budget;
+	}
 
 	boolean wasSuggested(int itemId, int price, boolean buying)
 	{
@@ -187,6 +210,7 @@ class FlipService
 					vol = (v.has("highPriceVolume") ? v.get("highPriceVolume").getAsLong() : 0)
 						+ (v.has("lowPriceVolume") ? v.get("lowPriceVolume").getAsLong() : 0);
 				}
+				quotes.put(id, new long[]{low + 1, high - 1, vol * 12});
 				if (low < 100 || vol < 10)
 				{
 					continue;
