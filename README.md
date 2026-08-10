@@ -88,6 +88,15 @@ While the Grand Exchange is open, RuneAI becomes a flipping copilot — all in t
 - **Honest accounting**: profit = sell − buy − 2% GE tax (floored per item, sub-50gp sales untaxed), booked per partial fill the moment it happens, cost basis persisted across restarts. Session footer: realized P&L, gp/h, units traded, suggestion win/loss record.
 - **The TRADER skill**: positive flip profit awards XP on the genuine OSRS experience curve (0.1 xp per gp — level 99 represents roughly 130M lifetime profit). Each level raises the maximum item value the advisor will suggest, so your bankroll and your skill climb together. Level-ups get the full treatment: banner, voice line, mascot celebration.
 
+**Trade Collection Log**: the first time you complete a profitable buy→sell cycle on an item you've never flipped, it gets *collected* — celebration popup, and the item's icon joins the Trade log grid in the sidebar. A collection log for merchants, persisted forever.
+
+**Chat commands** (render for RuneAI users, like !kc):
+
+![RuneAI chat commands: !profit and !lvl trader](docs/img/runeai-chat-commands.png)
+
+- `!profit` — your session flip profit and gp/h
+- `!lvl trader` — your Trader level, xp, and trade log size
+
 RuneAI never places, modifies, or cancels offers — every click is yours.
 
 ### Session P&L ledger
