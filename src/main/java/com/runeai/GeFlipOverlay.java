@@ -27,6 +27,7 @@ public class GeFlipOverlay extends Overlay
 	private final Client client;
 	private final RuneAIConfig config;
 	private final FlipService flips;
+	private final net.runelite.client.game.ItemManager itemManager;
 
 	private volatile int activeSlots, totalSlots = 3;
 	private volatile long medBuySecs = -1, medSellSecs = -1;
@@ -54,11 +55,13 @@ public class GeFlipOverlay extends Overlay
 	}
 
 	@Inject
-	GeFlipOverlay(Client client, RuneAIConfig config, FlipService flips)
+	GeFlipOverlay(Client client, RuneAIConfig config, FlipService flips,
+		net.runelite.client.game.ItemManager itemManager)
 	{
 		this.client = client;
 		this.config = config;
 		this.flips = flips;
+		this.itemManager = itemManager;
 		setPosition(OverlayPosition.TOP_RIGHT);
 		setLayer(OverlayLayer.ABOVE_WIDGETS);
 		setMovable(true);
@@ -253,12 +256,40 @@ public class GeFlipOverlay extends Overlay
 		final int net = (int) (sellAt - FlipService.geTax((int) sellAt) - buyAt);
 		final int limit = flips.limitFor(itemId);
 		final long budget = flips.getBudget();
-		long qty = Math.max(1, Math.min(limit, volHr / 10));
-		if (budget > 0)
+
+		// GE varbit 4397: 0 = buy setup, 1 = sell setup — different advice entirely
+		final boolean selling = client.getVarbitValue(4397) == 1;
+		long qty;
+		long total;
+		if (selling)
 		{
-			qty = Math.min(qty, Math.max(1, budget / Math.max(1, buyAt)));
+			// selling: dump the full stack you hold at the undercut price
+			long held = 0;
+			final net.runelite.api.ItemContainer inv =
+				client.getItemContainer(net.runelite.api.InventoryID.INVENTORY);
+			if (inv != null)
+			{
+				for (net.runelite.api.Item it : inv.getItems())
+				{
+					if (it != null && it.getId() > 0
+						&& itemManager.canonicalize(it.getId()) == itemId)
+					{
+						held += it.getQuantity();
+					}
+				}
+			}
+			qty = Math.max(1, held);
+			total = (sellAt - FlipService.geTax((int) sellAt)) * qty;
 		}
-		final long total = net * qty;
+		else
+		{
+			qty = Math.max(1, Math.min(limit, volHr / 10));
+			if (budget > 0)
+			{
+				qty = Math.min(qty, Math.max(1, budget / Math.max(1, buyAt)));
+			}
+			total = net * qty;
+		}
 
 		g.setFont(g.getFont().deriveFont(Font.BOLD, 15f));
 		g.setColor(Color.WHITE);
@@ -271,7 +302,9 @@ public class GeFlipOverlay extends Overlay
 		g.drawString(String.format("~%,d traded/hr · buy limit %,d", volHr, limit), 10, 96);
 		g.setFont(g.getFont().deriveFont(Font.BOLD, 15f));
 		g.setColor(GOLD);
-		g.drawString(String.format("suggested qty %,d  →  total %+,d gp", qty, total), 10, 122);
+		g.drawString(selling
+			? String.format("sell ALL %,d  →  %,d gp after tax", qty, total)
+			: String.format("suggested qty %,d  →  total %+,d gp", qty, total), 10, 122);
 		return new Dimension(W, h);
 	}
 
