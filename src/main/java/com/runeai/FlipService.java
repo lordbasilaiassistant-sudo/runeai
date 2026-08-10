@@ -56,6 +56,7 @@ class FlipService
 	private final java.util.Set<Integer> trapItems = ConcurrentHashMap.newKeySet();
 	private final Map<Integer, Long> predictedMid = new ConcurrentHashMap<>(); // last scan's forecast
 	private final Map<Integer, java.util.ArrayDeque<Long>> midHist = new ConcurrentHashMap<>(); // ~30min window
+	private final Map<Integer, Long> prevMids = new ConcurrentHashMap<>();  // the mid one scan back, for the brain
 	private final Map<Integer, Double> momentum = new ConcurrentHashMap<>();   // slope over the window
 	volatile double lastScanAvgErr = -1; // global market-surprise gauge, logged each scan
 	private final AtomicLong lastFast = new AtomicLong();
@@ -101,19 +102,34 @@ class FlipService
 
 	private final ItemMemory itemMemory;
 	private final FillTimeModel fillModel;
+	private final GeBrain brain;
+	private final Champion champion;
 
 	@Inject
-	FlipService(OkHttpClient http, Gson gson, ItemMemory itemMemory, FillTimeModel fillModel)
+	FlipService(OkHttpClient http, Gson gson, ItemMemory itemMemory, FillTimeModel fillModel,
+		GeBrain brain, Champion champion)
 	{
 		this.http = http;
 		this.gson = gson;
 		this.itemMemory = itemMemory;
 		this.fillModel = fillModel;
+		this.brain = brain;
+		this.champion = champion;
 	}
 
 	String fillModelStatus()
 	{
 		return fillModel.status();
+	}
+
+	String brainStatus()
+	{
+		return brain.status();
+	}
+
+	String championStatus()
+	{
+		return champion.status();
 	}
 
 	/** Player context from the plugin: carried coins + world type. */
@@ -158,7 +174,8 @@ class FlipService
 			out.sort(Comparator.comparingDouble(f ->
 				-velocity(f, slotCapital(b))
 					* itemMemory.scoreMultiplier(f.getItemId())
-					* momentumFactor(f.getItemId())));
+					* momentumFactor(f.getItemId())
+					* brainFactor(f.getItemId(), f.getBuyAt(), f.getNet())));
 		}
 		final List<Flip> top = out.subList(0, Math.min(8, out.size()));
 		final long now = System.currentTimeMillis();
@@ -232,10 +249,15 @@ class FlipService
 		return coins <= 0 ? 0 : (long) (coins * capitalShare());
 	}
 
-	/** Even split across the quick slots. #4 replaces this with the evolved genome. */
+	/**
+	 * How much of the bankroll one position may take: the champion's evolved
+	 * concentration when it has an edge, otherwise an even split across the quick
+	 * slots. A share is a share — it carries no time in it, so unlike the ROI
+	 * floor it moves from the league's hourly bars to a live cycle untouched.
+	 */
 	double capitalShare()
 	{
-		return 1.0 / Math.max(1, quickSlots);
+		return champion.conc(1.0 / Math.max(1, quickSlots));
 	}
 
 	/**
@@ -362,6 +384,9 @@ class FlipService
 	 * Momentum gate learned from the battleaxe loss: buying into a falling
 	 * mid is how "margins" become losses. Falling -> 0.3x, flat/gently
 	 * rising -> boosted, vertical spike -> damped (mean reversion risk).
+	 *
+	 * <p>The two cut points are the champion genome's when it has an edge, and
+	 * the hand-tuned ones otherwise.
 	 */
 	private double momentumFactor(int itemId)
 	{
@@ -370,11 +395,11 @@ class FlipService
 		{
 			return 1.0;
 		}
-		if (m < -0.01)
+		if (m < champion.momBuyCut())
 		{
 			return 0.3;   // falling knife
 		}
-		if (m > 0.05)
+		if (m > champion.momSpikeCut())
 		{
 			return 0.6;   // spike — likely reverts before your sell fills
 		}
@@ -383,6 +408,39 @@ class FlipService
 			return 1.15;  // gentle rise: the sell side is coming to meet you
 		}
 		return 1.0;
+	}
+
+	/**
+	 * The backtrained brain's opinion, as a ranking multiplier only.
+	 *
+	 * <p>It compares the sell print the brain expects against the one the book
+	 * currently supports: a forecast below our ask demotes the item, a forecast
+	 * above it promotes. Clamped hard both ways because the brain learned on 1h
+	 * and 5m bars and is being asked about a 60-second step — an unresolved
+	 * horizon gap that makes it a tie-breaker, not an oracle. Returns 1.0 when
+	 * the brain is absent or lost to its baseline.
+	 */
+	private double brainFactor(int itemId, int buyAt, int net)
+	{
+		if (!brain.adopted() || net <= 0)
+		{
+			return 1.0;
+		}
+		final long[] b = books.get(itemId);
+		if (b == null)
+		{
+			return 1.0;
+		}
+		final Long prevMid = prevMids.get(itemId);
+		final long predSell = brain.predictedSell(itemId, b[0], b[1], b[2],
+			prevMid == null ? 0 : prevMid,
+			java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC).getHour());
+		if (predSell <= 0)
+		{
+			return 1.0;
+		}
+		final double predNet = predSell - geTax((int) predSell) - buyAt;
+		return Math.max(0.25, Math.min(2.0, predNet / net));
 	}
 
 	static int geTax(int sellPrice)
@@ -454,7 +512,11 @@ class FlipService
 		}
 		get("/latest", latestBody ->
 		{
-			fillModel.ensureLoaded(); // off the client thread, and needed below
+			// all three learned artifacts load here: an OkHttp callback thread, never
+			// the client thread, and every one of them is gated on its own verdict
+			fillModel.ensureLoaded();
+			brain.ensureLoaded();
+			champion.ensureLoaded();
 			final JsonObject latest = gson.fromJson(latestBody, JsonObject.class).getAsJsonObject("data");
 			final JsonObject five = gson.fromJson(fiveBody, JsonObject.class).getAsJsonObject("data");
 			final List<Flip> flips = new ArrayList<>();
@@ -503,6 +565,10 @@ class FlipService
 				predictedMid.put(id, mid);
 				// momentum over the last ~30 min of scans: the falling-knife detector
 				final java.util.ArrayDeque<Long> h = midHist.computeIfAbsent(id, k -> new java.util.ArrayDeque<>());
+				if (!h.isEmpty())
+				{
+					prevMids.put(id, h.peekLast()); // the brain's momentum feature
+				}
 				h.addLast(mid);
 				while (h.size() > 6)
 				{
@@ -553,12 +619,16 @@ class FlipService
 				{
 					continue;
 				}
-				// ROI over 30% on a liquid item = stale outlier price, not free money
-				if (net <= 0 || net * 100.0 / buyAt > 30)
+				// ROI over 30% on a liquid item = stale outlier price, not free money.
+				// The floor underneath is the champion's, converted from its hourly
+				// bar to THIS cycle so it stays a rate of return rather than an
+				// impossible demand on a forty-second flip.
+				final double roi = net / (double) buyAt;
+				if (net <= 0 || roi > 0.30 || roi < champion.roiFloorFor(cyc))
 				{
 					continue;
 				}
-				final double unitsHr = Math.min(limits.get(id)[0] / 4.0, vol * 12 * 0.05);
+				final double unitsHr = Math.min(limits.get(id)[0] / 4.0, vol * 12 * champion.volShare());
 				flips.add(new Flip(id, name, buyAt, sellAt, net,
 					net * 100.0 / buyAt, (long) (net * unitsHr), unitsHr,
 					membersItem.getOrDefault(id, true), cyc, lane));
@@ -567,8 +637,9 @@ class FlipService
 			allFlips = flips;
 			itemMemory.flush(); // one write for the whole scan's memory updates
 			lastScanAvgErr = errN > 0 ? errSum / errN : -1;
-			log.info("flip scan: {} candidates, market surprise {}",
-				flips.size(), lastScanAvgErr >= 0 ? String.format("%.2f%%", lastScanAvgErr * 100) : "n/a");
+			log.info("flip scan: {} candidates, market surprise {} | brain {} | champion {} | fill model {}",
+				flips.size(), lastScanAvgErr >= 0 ? String.format("%.2f%%", lastScanAvgErr * 100) : "n/a",
+				brain.status(), champion.status(), fillModel.status());
 		});
 	}
 

@@ -41,9 +41,43 @@ All source lives in `src/main/java/com/runeai/`.
 | `RuneAIPanel.java` | RuneLite sidebar `PluginPanel` — game state, player, activity (+ gp/xp goal), session P&L, bond fund, NPC/player/event counts, and the Ko-fi button. |
 | `GameStateSnapshot.java` | Static one-shot capture of the whole client state into a `Map` for a JSON dump. **Client thread only.** |
 | `EventLog.java` | Append-only JSONL writer (`{"t":iso,"tick":n,"e":type,...}`), flushes every 50 lines. |
+| `FlipService.java` | Live GE intelligence off the wiki prices API: books, tax-aware margins, trap detection, lane classification, and the velocity ranker. Suggestions only. |
+| `FlipLane.java` | The QUICK / LONG taxonomy — pure classifier plus the volume-based cycle-time prior. |
+| `ItemMemory.java` | Per-item bandit memory persisted to `~/.runelite/runeai/item-memory.json`, with per-lane ledgers and recovery-based cooldown expiry. |
+| `FillTimeModel.java` | Dot-product inference for `train/flip_model.json`. Gated on that file's `verdict`. |
+| `GeBrain.java` | 7-16-1 tanh forward pass for `~/.runelite/runeai/ge-brain-hist.json`. Gated on `metrics.beats_baseline`. Moves ranking, never a coached price. |
+| `Champion.java` | Evolved policy genome from `~/.runelite/runeai/ge-champion.json`. Gated on `emergent_edge`; every getter falls back to the constant it replaced. |
+| `TrapBoard.java` | Whale-trap history from `~/.runelite/runeai/trap-board.json` (written by `sim/whale_trap_report.py`). |
+| `GeFlipOverlay.java` / `GeSlotStampOverlay.java` | Draw-only GE advice: quick-lane picks, offer coach, slot stamps, reprice steps. |
 | `src/test/java/com/runeai/RuneAIPluginTest.java` | Dev launcher — `ExternalPluginManager.loadBuiltin(RuneAIPlugin.class)` then `RuneLite.main(args)`. This is `./gradlew run`'s main class. |
 | `train/train_damage_model.py` | Numpy logistic regression over recorded tick vectors → `train/damage_model.json` (P(damage within 3 ticks)). Not yet wired into the plugin. |
+| `train/train_flip_model.py` | Ridge regression on log(seconds-to-fill) → `train/flip_model.json`, judged K-fold out-of-sample. |
 | `runelite-plugin.properties` | Hub manifest (displayName, version, `plugins=com.runeai.RuneAIPlugin`). |
+
+### Learned artifacts and their gates
+
+Four models can influence flip suggestions. **Every one of them is gated on a
+verdict the training run wrote into its own file, and every gate falls back to
+the behaviour that existed before the model.** A missing file, an unparseable
+one, or a losing verdict must never degrade anything — if you add a fifth, it
+follows the same rule.
+
+| Artifact | Where | Gate field | Adopted today |
+| --- | --- | --- | --- |
+| Fill-time model | `train/flip_model.json` (bundled via `processResources`; `~/.runelite/runeai/flip_model.json` overrides) | `verdict == "adopt"` | **No** — +6.7% log-space out-of-sample, 58% worse in seconds |
+| Price brain | `~/.runelite/runeai/ge-brain-hist.json` | `metrics.beats_baseline` | Yes, marginally (MSE 0.000805 vs martingale 0.000807) |
+| Champion genome | `~/.runelite/runeai/ge-champion.json` | `emergent_edge` | Yes (held-out 2,843,679 gp vs 527,095 default) |
+| Trap board | `~/.runelite/runeai/trap-board.json` | file present | Yes |
+
+Two rules that are easy to get wrong:
+
+- **Ranking, not pricing.** A model may reorder candidates. Every number the
+  plugin reads back to the player stays anchored to the live book and its 3x cap.
+- **Horizons do not transfer for free.** The brain and the champion were trained
+  on 1h bars; the live loop scans every 60s. Parameters that are pure shares
+  (`vol_share`, `conc`) carry over unchanged. Anything with time in it
+  (`roi_floor`) must be converted pro-rata, and the brain's opinion is clamped to
+  a tie-breaker.
 
 ### Data flow
 

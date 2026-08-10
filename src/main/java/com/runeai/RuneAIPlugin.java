@@ -689,6 +689,8 @@ public class RuneAIPlugin extends Plugin
 				d.put("budget", coins);
 				d.put("marketSurprise", flipService.lastScanAvgErr);
 				d.put("fillModel", flipService.fillModelStatus());
+				d.put("brain", flipService.brainStatus());
+				d.put("champion", flipService.championStatus());
 				emit("flipScan", d);
 			}
 			geFlipOverlay.setTrader(traderLevel,
