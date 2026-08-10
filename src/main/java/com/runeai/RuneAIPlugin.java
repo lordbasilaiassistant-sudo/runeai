@@ -111,6 +111,9 @@ public class RuneAIPlugin extends Plugin
 	@Inject
 	private FlipService flipService;
 
+	@Inject
+	private ItemMemory itemMemory;
+
 	// realized GE flip tracking (fills are post-tax in the coins we receive)
 	private final Map<Integer, long[]> flipBasis = new java.util.HashMap<>(); // id -> {qty, totalCost}
 	private long flipRealized;
@@ -133,6 +136,7 @@ public class RuneAIPlugin extends Plugin
 	private long unitsBought, unitsSold;
 	private long firstOfferMs;
 	private long lastFlipScanLogMs;
+	private long lastSellProfit; // most recent realized sell profit, for item memory
 
 	// ---- TRADER: the flipping skill. profit gp -> xp on the real OSRS curve;
 	// each level raises the max item value you can flip (lvl 99 ~ max cash play)
@@ -446,6 +450,7 @@ public class RuneAIPlugin extends Plugin
 					final long gross = (long) dQty * o.getPrice();
 					final long tax = (long) FlipService.geTax(o.getPrice()) * dQty;
 					final long profit = gross - tax - cost;
+					lastSellProfit = profit;
 					flipRealized += profit;
 					unitsSold += dQty;
 					panel.setFlipPnl(flipRealized);
@@ -480,6 +485,8 @@ public class RuneAIPlugin extends Plugin
 			{
 				fillSecs = (nowMs - tr.startMs) / 1000;
 				(buying ? buyFillSecs : sellFillSecs).add(fillSecs);
+				itemMemory.recordFill(o.getItemId(), fillSecs,
+					buying ? 0 : lastSellProfit);
 			}
 			if (sug)
 			{
@@ -497,6 +504,7 @@ public class RuneAIPlugin extends Plugin
 			{
 				sugCancels++; // our call stalled long enough that they pulled it
 			}
+			itemMemory.recordStall(o.getItemId()); // it stopped working — learn that
 			offerTracks[slot] = null;
 		}
 

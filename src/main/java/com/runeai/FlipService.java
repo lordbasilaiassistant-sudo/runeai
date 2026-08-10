@@ -67,11 +67,14 @@ class FlipService
 		boolean members;
 	}
 
+	private final ItemMemory itemMemory;
+
 	@Inject
-	FlipService(OkHttpClient http, Gson gson)
+	FlipService(OkHttpClient http, Gson gson, ItemMemory itemMemory)
 	{
 		this.http = http;
 		this.gson = gson;
+		this.itemMemory = itemMemory;
 	}
 
 	/** Player context from the plugin: carried coins + world type. */
@@ -105,8 +108,11 @@ class FlipService
 		}
 		if (b > 0)
 		{
+			// market math x learned memory: proven-fast items float up, recent
+			// stalls sink, unknowns keep a little exploration optimism
 			out.sort(Comparator.comparingDouble(f ->
-				-(double) f.getNet() * Math.min(f.getUnitsHr(), (double) b / f.getBuyAt())));
+				-(double) f.getNet() * Math.min(f.getUnitsHr(), (double) b / f.getBuyAt())
+					* itemMemory.scoreMultiplier(f.getItemId())));
 		}
 		final List<Flip> top = out.subList(0, Math.min(8, out.size()));
 		final long now = System.currentTimeMillis();
