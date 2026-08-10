@@ -42,6 +42,8 @@ class FlipService
 	private volatile List<Flip> allFlips = List.of();
 	private final Map<Integer, long[]> quotes = new ConcurrentHashMap<>(); // id -> {buyAt, sellAt, volHr}
 	private final Map<Integer, Long> predictedMid = new ConcurrentHashMap<>(); // last scan's forecast
+	private final Map<Integer, java.util.ArrayDeque<Long>> midHist = new ConcurrentHashMap<>(); // ~30min window
+	private final Map<Integer, Double> momentum = new ConcurrentHashMap<>();   // slope over the window
 	volatile double lastScanAvgErr = -1; // global market-surprise gauge, logged each scan
 	private final AtomicLong lastRefresh = new AtomicLong();
 	private volatile long budget = -1;       // carried coins; -1 = unknown
@@ -114,7 +116,8 @@ class FlipService
 			// stalls sink, unknowns keep a little exploration optimism
 			out.sort(Comparator.comparingDouble(f ->
 				-(double) f.getNet() * Math.min(f.getUnitsHr(), (double) b / f.getBuyAt())
-					* itemMemory.scoreMultiplier(f.getItemId())));
+					* itemMemory.scoreMultiplier(f.getItemId())
+					* momentumFactor(f.getItemId())));
 		}
 		final List<Flip> top = out.subList(0, Math.min(8, out.size()));
 		final long now = System.currentTimeMillis();
@@ -159,6 +162,33 @@ class FlipService
 		}
 		final long ref = buying ? s[0] : s[1];
 		return ref > 0 && Math.abs(price - ref) <= ref * 0.03;
+	}
+
+	/**
+	 * Momentum gate learned from the battleaxe loss: buying into a falling
+	 * mid is how "margins" become losses. Falling -> 0.3x, flat/gently
+	 * rising -> boosted, vertical spike -> damped (mean reversion risk).
+	 */
+	private double momentumFactor(int itemId)
+	{
+		final Double m = momentum.get(itemId);
+		if (m == null)
+		{
+			return 1.0;
+		}
+		if (m < -0.01)
+		{
+			return 0.3;   // falling knife
+		}
+		if (m > 0.05)
+		{
+			return 0.6;   // spike — likely reverts before your sell fills
+		}
+		if (m > 0.005)
+		{
+			return 1.15;  // gentle rise: the sell side is coming to meet you
+		}
+		return 1.0;
 	}
 
 	static int geTax(int sellPrice)
@@ -250,6 +280,17 @@ class FlipService
 					errN++;
 				}
 				predictedMid.put(id, mid);
+				// momentum over the last ~30 min of scans: the falling-knife detector
+				final java.util.ArrayDeque<Long> h = midHist.computeIfAbsent(id, k -> new java.util.ArrayDeque<>());
+				h.addLast(mid);
+				while (h.size() > 6)
+				{
+					h.removeFirst();
+				}
+				if (h.size() >= 3)
+				{
+					momentum.put(id, (mid - h.peekFirst()) / (double) h.peekFirst());
+				}
 				quotes.put(id, new long[]{low + 1, high - 1, vol * 12});
 				if (low < 100 || vol < 30 || !fresh)
 				{
