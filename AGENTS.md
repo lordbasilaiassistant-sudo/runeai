@@ -50,18 +50,19 @@ All source lives in `src/main/java/com/runeai/`.
 | `GeBrain.java` | 7-16-1 tanh forward pass for `~/.runelite/runeai/ge-brain-hist.json`. Gated on `metrics.beats_baseline`. Moves ranking, never a coached price. |
 | `Champion.java` | Evolved policy genome from `~/.runelite/runeai/ge-champion.json`. Gated on `emergent_edge`; every getter falls back to the constant it replaced. |
 | `TrapBoard.java` | Whale-trap history from `~/.runelite/runeai/trap-board.json` (written by `sim/whale_trap_report.py`). |
+| `DangerModel.java` | P(damage within 3 ticks) from `train/damage_model.json`. Per-activity baseline always; logistic residual only when `verdict.beats_baseline`. Its one consumer is the low-HP warning threshold. |
 | `GeFlipOverlay.java` / `GeSlotStampOverlay.java` | Draw-only GE advice: quick-lane picks, offer coach, slot stamps, reprice steps. |
 | `src/test/java/com/runeai/RuneAIPluginTest.java` | Dev launcher — `ExternalPluginManager.loadBuiltin(RuneAIPlugin.class)` then `RuneLite.main(args)`. This is `./gradlew run`'s main class. |
-| `train/train_damage_model.py` | Numpy logistic regression over recorded tick vectors → `train/damage_model.json` (P(damage within 3 ticks)). Not yet wired into the plugin. |
+| `train/train_damage_model.py` | Numpy logistic regression over recorded tick vectors → `train/damage_model.json` (P(damage within 3 ticks)). Read back by `DangerModel`. |
 | `train/train_flip_model.py` | Ridge regression on log(seconds-to-fill) → `train/flip_model.json`, judged K-fold out-of-sample. |
 | `runelite-plugin.properties` | Hub manifest (displayName, version, `plugins=com.runeai.RuneAIPlugin`). |
 
 ### Learned artifacts and their gates
 
-Four models can influence flip suggestions. **Every one of them is gated on a
+Five models can influence what the plugin says. **Every one of them is gated on a
 verdict the training run wrote into its own file, and every gate falls back to
 the behaviour that existed before the model.** A missing file, an unparseable
-one, or a losing verdict must never degrade anything — if you add a fifth, it
+one, or a losing verdict must never degrade anything — if you add a sixth, it
 follows the same rule.
 
 | Artifact | Where | Gate field | Adopted today |
@@ -70,6 +71,22 @@ follows the same rule.
 | Price brain | `~/.runelite/runeai/ge-brain-hist.json` | `metrics.beats_baseline` | Yes, marginally (MSE 0.000805 vs martingale 0.000807) |
 | Champion genome | `~/.runelite/runeai/ge-champion.json` | `emergent_edge` | Yes (held-out 2,843,679 gp vs 527,095 default) |
 | Trap board | `~/.runelite/runeai/trap-board.json` | file present | Yes |
+| Danger model | `train/damage_model.json` (bundled via `processResources`; `~/.runelite/runeai/damage_model.json` overrides) | `verdict.beats_baseline` | **Baseline half only** — the residual is muted (0 held-out positives) |
+
+The danger model is the one artifact whose gate is **partial**, and that is
+deliberate. It has two halves with different evidential standing:
+
+- The **per-activity baseline** is counted arithmetic — "Combat ticks were
+  followed by damage 6.5x more often than your average tick." It needs no
+  verdict, because it is not a claim about anything beyond what was counted.
+- The **logistic residual** is a learned opinion, and `DangerModel.effectiveGain`
+  forces its gain to 0 unless `verdict.beats_baseline` is true, whatever gain the
+  file itself carries. A retrain on a real P2P combat corpus turns it on with no
+  code change.
+
+`train/damage_model.json` is **gitignored** — it is derived from recorded play.
+`processResources` copies it into the jar when it exists, so a clean checkout
+just builds without it and the feature is inert. Never commit it.
 
 Two rules that are easy to get wrong:
 
@@ -102,6 +119,16 @@ RuneLite events ──> RuneAIPlugin (@Subscribe handlers)
 - **Low HP / EAT alert** — `updateGuidance()`, gated on `lowHpWarn()` + `lowHpPercent()`. Branches on
   `countInventoryAction("Eat")`: food present → `EAT — HP x/y` + `eat` voice; nothing edible →
   `NO FOOD — get out / bank` + `bank` voice, throttled by `lastFoodWarnTick` to every 100 ticks.
+- **Danger-aware urgency** — `RuneAIPlugin.updateDanger()` scores each tick through `DangerModel` and
+  `DangerModel.urgencyBoost()` converts that into HP percentage points added to the EAT threshold: one
+  5-point step per doubling above 2x this player's average tick, capped at 15. An elevated context also
+  reads `EAT NOW`, holds the banner two ticks longer, and halves the no-food repeat to 50 ticks. Zero
+  boost reproduces the old behaviour byte for byte. Gated on `dangerModel()`.
+  **This is a coarse prior, not an attack predictor** — it moves a threshold and nothing else. Anything
+  tick-precise (next-attack timing, "stand here", attack counters) is out of bounds; see §4.
+  `RuneAIPlugin.sampleTick()` builds ONE `DangerModel.Tick` per game tick and hands it to both the
+  recorder and the model, so the corpus's features and the live features cannot drift apart.
+  `DangerModelTest` pins the feature arithmetic against numbers the Python trainer printed.
 - **Potion reminder** — `checkPotions()`, inventory name-match, fires only when the boosted level is not
   already above the real level, throttled to every 100 ticks.
 - **Loot flash** — `onItemSpawned()`, within 8 tiles, GE value ≥ `minLootValue()`, and **not** our own drop

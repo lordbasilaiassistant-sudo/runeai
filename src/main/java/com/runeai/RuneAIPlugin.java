@@ -121,6 +121,9 @@ public class RuneAIPlugin extends Plugin
 	private SessionHistory sessionHistory;
 
 	@Inject
+	private DangerModel dangerModel;
+
+	@Inject
 	private net.runelite.client.chat.ChatCommandManager chatCommandManager;
 
 	// trade collection log: items PROFITABLY flipped (real buy->sell) at least once
@@ -218,6 +221,8 @@ public class RuneAIPlugin extends Plugin
 	private int lastPotRemindTick;
 	private int lastKillTick = -1000;
 	private boolean wasUnderAttack;
+	/** HP percentage points the danger prior is currently adding to the EAT threshold. */
+	private int dangerBoost;
 
 	// pet follower state: Rune trails the player like a real OSRS pet
 	private WorldPoint petTile;
@@ -288,6 +293,7 @@ public class RuneAIPlugin extends Plugin
 			.build();
 		sessionStartMs = System.currentTimeMillis();
 		sessionHistory.begin(sessionStartMs);
+		dangerModel.loadAsync(); // reads a file: never on the client thread
 		panel.setViewsEnabled(config.sessionScore(), config.itemStats(), config.anomalyAlert());
 		loadFlipBasis();
 		loadTrader();
@@ -417,6 +423,13 @@ public class RuneAIPlugin extends Plugin
 		{
 			panel.setPlayer(null);
 			lastHolding = null;
+		}
+
+		if (state != GameState.LOGGED_IN)
+		{
+			// the danger window is five CONSECUTIVE ticks; a logout is not four ticks ago
+			dangerModel.reset();
+			dangerBoost = 0;
 		}
 	}
 
@@ -804,6 +817,11 @@ public class RuneAIPlugin extends Plugin
 			panel.setLanes(itemMemory.laneTotals(FlipLane.QUICK),
 				itemMemory.laneTotals(FlipLane.LONG));
 
+			panel.setDanger(config.dangerModel() ? dangerModel.status() : null,
+				config.dangerModel() && dangerModel.loaded()
+					? Math.min(95, config.lowHpPercent() + dangerBoost) : -1,
+				dangerBoost > 0);
+
 			// results views: what this session and each item have ACTUALLY paid
 			panel.setViewsEnabled(config.sessionScore(), config.itemStats(), config.anomalyAlert());
 			flipService.setAnomalyThreshold(config.anomalyPercent());
@@ -863,7 +881,17 @@ public class RuneAIPlugin extends Plugin
 			emit("heartbeat", d);
 		}
 
-		recordTickVector(lp);
+		// one sample, two consumers — skipped entirely when neither wants it
+		if (tickLog != null || config.dangerModel())
+		{
+			final DangerModel.Tick sample = sampleTick(lp);
+			recordTickVector(lp, sample);
+			updateDanger(sample);
+		}
+		else
+		{
+			dangerBoost = 0;
+		}
 		updateGuidance(lp);
 		damageTakenThisTick = 0;
 	}
@@ -1529,14 +1557,20 @@ public class RuneAIPlugin extends Plugin
 		{
 			final int hp = client.getBoostedSkillLevel(Skill.HITPOINTS);
 			final int max = Math.max(1, client.getRealSkillLevel(Skill.HITPOINTS));
-			if (underAttack && hp * 100 / max <= config.lowHpPercent())
+			// the danger prior buys HP percentage points, never a new alert: in a
+			// context that has actually hurt this player, the same warning fires
+			// earlier and repeats sooner. Zero boost = exactly the old behaviour.
+			final boolean elevated = dangerBoost > 0;
+			final int threshold = Math.min(95, config.lowHpPercent() + dangerBoost);
+			if (underAttack && hp * 100 / max <= threshold)
 			{
 				if (countInventoryAction("Eat") > 0)
 				{
-					overlay.setAlert("EAT — HP " + hp + "/" + max, tick + 2);
+					overlay.setAlert((elevated ? "EAT NOW — HP " : "EAT — HP ") + hp + "/" + max,
+						tick + (elevated ? 4 : 2));
 					voice.play("eat");
 				}
-				else if (tick - lastFoodWarnTick >= 100)
+				else if (tick - lastFoodWarnTick >= (elevated ? 50 : 100))
 				{
 					// low, under attack, and NOTHING edible left — that's the real emergency
 					lastFoodWarnTick = tick;
@@ -1773,11 +1807,45 @@ public class RuneAIPlugin extends Plugin
 	}
 
 	/**
+	 * One read of this tick's threat state, in the shape a row of
+	 * {@code ticks-*.jsonl} has. The recorder that writes the training corpus and
+	 * the model that infers from it are handed the SAME object, so the features
+	 * trained on and the features inferred from cannot drift apart — which is the
+	 * failure mode {@link DangerModel} would never notice and never report.
+	 *
+	 * <p>Client thread only, and the NPC list is the nearest 8 by distance
+	 * because that is exactly what the corpus holds.
+	 */
+	private DangerModel.Tick sampleTick(Player lp)
+	{
+		final WorldPoint wp = lp.getWorldLocation();
+		final List<NPC> npcs = new ArrayList<>(client.getNpcs());
+		npcs.removeIf(n -> n == null || n.getName() == null);
+		npcs.sort(Comparator.comparingInt(n -> wp.distanceTo(n.getWorldLocation())));
+		final List<DangerModel.Npc> near = new ArrayList<>();
+		for (int i = 0; i < Math.min(8, npcs.size()); i++)
+		{
+			final NPC n = npcs.get(i);
+			near.add(new DangerModel.Npc(n.getId(), wp.distanceTo(n.getWorldLocation()),
+				n.getAnimation(), n.getHealthRatio(), n.getInteracting() == lp));
+		}
+		final Actor inter = lp.getInteracting();
+		return new DangerModel.Tick(
+			client.getBoostedSkillLevel(Skill.HITPOINTS),
+			client.getRealSkillLevel(Skill.HITPOINTS),
+			client.getBoostedSkillLevel(Skill.PRAYER),
+			damageTakenThisTick,
+			lp.getAnimation(),
+			inter instanceof NPC ? ((NPC) inter).getId() : -1,
+			wp.getX(), wp.getY(), npcs.size(), near);
+	}
+
+	/**
 	 * Fixed-shape per-tick state record — the NN training corpus.
 	 * One line per game tick; dmgTaken is the built-in label for
 	 * "should I have been warned last tick?"
 	 */
-	private void recordTickVector(Player lp)
+	private void recordTickVector(Player lp, DangerModel.Tick s)
 	{
 		if (tickLog == null)
 		{
@@ -1786,19 +1854,19 @@ public class RuneAIPlugin extends Plugin
 
 		final Map<String, Object> d = m();
 		final WorldPoint wp = lp.getWorldLocation();
-		d.put("x", wp.getX());
-		d.put("y", wp.getY());
+		d.put("x", s.x);
+		d.put("y", s.y);
 		d.put("plane", wp.getPlane());
 		d.put("region", wp.getRegionID());
-		d.put("hp", client.getBoostedSkillLevel(Skill.HITPOINTS));
-		d.put("hpMax", client.getRealSkillLevel(Skill.HITPOINTS));
-		d.put("pray", client.getBoostedSkillLevel(Skill.PRAYER));
+		d.put("hp", s.hp);
+		d.put("hpMax", s.hpMax);
+		d.put("pray", s.pray);
 		d.put("energy", client.getEnergy() / 100.0);
 		d.put("spec", client.getVarpValue(net.runelite.api.VarPlayer.SPECIAL_ATTACK_PERCENT) / 10);
-		d.put("anim", lp.getAnimation());
+		d.put("anim", s.anim);
 		d.put("pose", lp.getPoseAnimation());
 		d.put("graphic", lp.getGraphic());
-		d.put("dmgTaken", damageTakenThisTick);
+		d.put("dmgTaken", s.dmgTaken);
 		d.put("pnl", sessionPnl);
 		d.put("activity", currentActivity());
 		d.put("goal", goalMode());
@@ -1821,30 +1889,49 @@ public class RuneAIPlugin extends Plugin
 			}
 		}
 		d.put("equip", gear);
-
-		final Actor inter = lp.getInteracting();
-		d.put("targetNpcId", inter instanceof NPC ? ((NPC) inter).getId() : -1);
+		d.put("targetNpcId", s.targetNpcId);
 
 		// nearest 8 NPCs, sorted by distance — the local threat picture
-		final List<NPC> npcs = new ArrayList<>(client.getNpcs());
-		npcs.removeIf(n -> n == null || n.getName() == null);
-		npcs.sort(Comparator.comparingInt(n -> wp.distanceTo(n.getWorldLocation())));
 		final List<Map<String, Object>> near = new ArrayList<>();
-		for (int i = 0; i < Math.min(8, npcs.size()); i++)
+		for (DangerModel.Npc n : s.npcs)
 		{
-			final NPC n = npcs.get(i);
 			final Map<String, Object> nm = m();
-			nm.put("id", n.getId());
-			nm.put("dist", wp.distanceTo(n.getWorldLocation()));
-			nm.put("anim", n.getAnimation());
-			nm.put("hr", n.getHealthRatio());
-			nm.put("atkMe", n.getInteracting() == lp);
+			nm.put("id", n.id);
+			nm.put("dist", n.dist);
+			nm.put("anim", n.anim);
+			nm.put("hr", n.hr);
+			nm.put("atkMe", n.atkMe);
 			near.add(nm);
 		}
-		d.put("npcCount", npcs.size());
+		d.put("npcCount", s.npcCount);
 		d.put("npcs", near);
 
 		tickLog.log("tick", client.getTickCount(), d);
+	}
+
+	/**
+	 * Where the trained danger model touches the game — and the only place. It
+	 * raises the urgency of the low-HP warning that already existed and does
+	 * nothing else: no tile marker, no attack timer, no "it hits in two ticks".
+	 * A coarse prior on a threshold, which is the side of the hub line this has
+	 * to stay on.
+	 *
+	 * <p>Today the shipped model's verdict is false, so it IS its per-activity
+	 * baseline: "Combat ticks have hurt you 6.5x more often than your average
+	 * tick" — worth warning a little earlier for, and worth nothing more. A
+	 * retrain that earns a positive verdict sharpens the same number per tick
+	 * with no change here.
+	 */
+	private void updateDanger(DangerModel.Tick sample)
+	{
+		if (!config.dangerModel())
+		{
+			dangerModel.reset();
+			dangerBoost = 0;
+			return;
+		}
+		dangerBoost = DangerModel.urgencyBoost(
+			dangerModel.observe(currentActivity(), sample), dangerModel.globalRate());
 	}
 
 	@Subscribe

@@ -38,6 +38,7 @@ public class RuneAIPanel extends PluginPanel
 	private final JLabel activityValue = new JLabel("—");
 	private final JLabel pnlValue = new JLabel("0 gp");
 	private final JLabel bondValue = new JLabel("—");
+	private final JLabel dangerValue = new JLabel("—");
 	private final JLabel flipPnlValue = new JLabel("0 gp");
 	private final JPanel flipsBox = new JPanel();
 	private final JPanel trapsBox = new JPanel();
@@ -92,6 +93,7 @@ public class RuneAIPanel extends PluginPanel
 		card.add(row("Session P&L", pnlValue));
 		card.add(row("Flip P&L", flipPnlValue));
 		card.add(row("Bond fund", bondValue));
+		card.add(row("EAT warning", dangerValue));
 		card.add(row("NPCs loaded", npcValue));
 		card.add(row("Players loaded", playersValue));
 		card.add(row("Events logged", eventsValue));
@@ -615,6 +617,36 @@ public class RuneAIPanel extends PluginPanel
 				? String.format("Total worth %,d gp vs bond %,d gp", worth, bondPrice)
 				: "Open your bank once to count everything you own");
 			bondValue.setForeground(pct >= 100 ? OK_GREEN : ACCENT);
+		});
+	}
+
+	/**
+	 * The trained danger prior, shown as the only thing it actually changes: the
+	 * HP percent at which the EAT warning fires. Deliberately NOT a live danger
+	 * meter — the arrow says the current context has pushed the threshold up,
+	 * not that something is about to hit you.
+	 *
+	 * @param status model status line, or null when the feature is switched off
+	 * @param eatPercent the effective threshold, or -1 when there is no model
+	 */
+	public void setDanger(String status, int eatPercent, boolean elevated)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			if (status == null)
+			{
+				dangerValue.setText("off");
+				dangerValue.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+				dangerValue.setToolTipText("Danger-aware warnings are switched off in the RuneAI config");
+				return;
+			}
+			dangerValue.setText(eatPercent < 0
+				? "—" : eatPercent + "%" + (elevated ? " ↑" : ""));
+			dangerValue.setForeground(eatPercent < 0 ? Color.WHITE : (elevated ? ALERT : OK_GREEN));
+			dangerValue.setToolTipText("<html>" + status + "<br><br>"
+				+ "A coarse risk prior trained on your own recorded ticks. In a context that has<br>"
+				+ "actually hurt you it warns earlier; everywhere else the threshold is the one you set.<br>"
+				+ "It never predicts an attack.</html>");
 		});
 	}
 

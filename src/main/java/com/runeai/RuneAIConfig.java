@@ -138,6 +138,16 @@ public interface RuneAIConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "dangerModel",
+		name = "Danger-aware warnings",
+		description = "Use the danger model trained on your own recorded ticks (py train/train_damage_model.py) as a coarse risk prior: in a context that has actually hurt you, the low-HP EAT warning fires earlier and repeats sooner. It never predicts an attack and never marks a tile. No trained model on disk means no change at all"
+	)
+	default boolean dangerModel()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "trapGuard",
 		name = "Thin-book trap guard",
 		description = "On illiquid items whose only recent high print is a whale overpay, mute reprice coaching instead of quoting the whale's price back at you"

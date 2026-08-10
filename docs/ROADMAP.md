@@ -125,21 +125,31 @@ silenced by `showOverlays` / `voiceCallouts`, which is a gap worth closing befor
 
 ## Phase 2 — Learned guidance (next)
 
-### Trained danger model [next]
+### Trained danger model [done]
 
-`train/train_damage_model.py` exists and runs today; **its output is not yet wired into the plugin.**
+`train/train_damage_model.py` trains it, `DangerModel.java` reads it back — one dot product per game
+tick, no sidecar process and no runtime dependency.
 
-- Trains a pure-numpy logistic regression on recorded tick vectors to predict
-  **P(take damage within the next 3 ticks)**.
-- Nine features: `hpFrac`, `prayFrac`, `npcCount`, `nearestDist`, `nearestAtkMe`, `nearestAnim`,
-  `attackersOn`, `inCombatAnim`, `bias`.
-- Refuses to train on fewer than 500 recorded ticks and prints test accuracy, majority baseline, and AUC.
-- Writes `train/damage_model.json` (weights + feature spec + metrics).
-- Ship gate stated in the trainer itself: **AUC above 0.75** before the score becomes a live warning.
-- Remaining work: load the JSON weights inside the plugin and evaluate one dot product per tick, so the
-  warning fires on the **same tick** the danger appears rather than after the hitsplat lands. Logistic
-  regression was chosen deliberately so this needs no sidecar process and no runtime dependency; a real
-  neural net is only justified once this baseline is beaten with more data.
+- Predicts **P(take damage within the next 3 ticks)** as a per-activity baseline plus a logistic
+  residual over 15 features (`hpFrac`, `recentDmg`, `recentHit`, `prayFrac`, `npcCount`, `nearestDist`,
+  `nearestAtkMe`, `nearestAnim`, `nearestHasHp`, `attackersOn`, `attackerAdjacent`, `inCombatAnim`,
+  `hasTarget`, `moving`, `bias`).
+- **What it does with the number: it moves one threshold.** In a context that has historically hurt
+  you, the existing low-HP `EAT` warning fires earlier (up to +15 HP percentage points), holds a little
+  longer, and repeats sooner. That is the entire integration. It is a coarse risk prior and it stays
+  that side of the line — no next-attack prediction, no tick-precise indicator, no "stand here" marker.
+- **The two halves are gated separately.** The baseline is counted arithmetic and is used as soon as
+  the file parses. The residual is muted unless the training run's own held-out `verdict.beats_baseline`
+  is true.
+- **On this corpus the verdict is false**, and honestly so: 24,078 recorded ticks contain 15 damage
+  windows and the held-out slice contains **zero**, so nothing about the residual is measurable. The
+  model currently in use is exactly its baseline — Combat at 0.85% of ticks against a 0.13% average,
+  which raises the EAT threshold from 33% to 43% while fighting and changes nothing anywhere else.
+  A positive verdict needs a real P2P combat corpus; when one exists, the retrain switches the
+  sharpened correction on with no code change.
+- Toggle: `dangerModel` (default on). No trained file on disk means no behaviour change at all.
+- `train/damage_model.json` is gitignored (it is derived from recorded play) and bundled into the jar
+  by `processResources` when present.
 
 ### Richer activity coverage [next]
 
@@ -194,7 +204,7 @@ rewritten before submission (the `@PluginDescriptor` in `RuneAIPlugin.java` says
 game state snapshots + live event stream", which is also now too narrow). The Java 11 release target comes
 from `build.gradle` (`options.release.set(11)`), not from the properties file.
 
-Before submitting we intend to: finish the danger-model integration, widen activity coverage, remove the
+Before submitting we intend to: widen activity coverage,
 give the bank nudge and bond ladder their own config toggles, fix the
 plugin description strings, review the data layer for anything a reviewer would flag, confirm no
 automation-adjacent behaviour anywhere in the codebase.
@@ -213,7 +223,9 @@ A real in-game screenshot lives in the README (docs/img/runeai-in-action.png), c
    never uploaded or committed.
 3. **Silence is a feature.** Cooldowns, value filters, and per-feature toggles exist so the buddy stays
    useful instead of annoying.
-4. **Ship the measurable version.** The danger model has a stated AUC gate before it is allowed to speak.
+4. **Ship the measurable version.** Every learned model is gated on a verdict its own training run wrote
+   from held-out data. The danger model's learned half is muted today because that verdict says the
+   evidence for it does not exist yet — and saying so is the feature, not a gap in it.
 
 ---
 
@@ -246,8 +258,11 @@ not counted as profit or loss.
 
 ### What is the trained danger model?
 
-A logistic regression over recorded tick vectors that estimates the probability of taking damage within the
-next three game ticks. The trainer exists and runs; the live in-plugin warning is planned, not shipped.
+A model trained on your own recorded ticks that estimates the probability of taking damage within the next
+three game ticks. It runs inside the plugin and it does exactly one thing with that number: it makes the
+low-HP `EAT` warning fire earlier in situations that have actually hurt you. It does not predict attacks,
+mark tiles, or count ticks. On the corpus recorded so far its learned half has not beaten its own baseline
+and is switched off by the trainer's verdict, so what is live today is the plain per-activity damage rate.
 
 ### How do I support development?
 

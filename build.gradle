@@ -34,12 +34,18 @@ tasks.withType(JavaCompile).configureEach {
 	options.release.set(11)
 }
 
-// The trained fill-time model ships with the plugin. Copied from train/ rather
-// than duplicated into src/main/resources, so the file the trainer writes and
-// the file the plugin reads can never drift apart.
+// Trained models ship with the plugin. Copied from train/ rather than
+// duplicated into src/main/resources, so the file the trainer writes and the
+// file the plugin reads can never drift apart.
+//
+// damage_model.json is gitignored — it is derived from recorded play, so it only
+// exists on a machine where the trainer has been run. A clean checkout simply
+// builds without it and the danger prior stays inert; nothing here ever puts it
+// in a commit.
 tasks.named('processResources') {
 	from('train') {
 		include 'flip_model.json'
+		include 'damage_model.json'
 		into 'com/runeai'
 	}
 }
