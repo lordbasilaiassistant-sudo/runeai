@@ -44,6 +44,10 @@ public class RuneAIPanel extends PluginPanel
 	private final JPanel clogGrid = new JPanel();
 	private final JLabel clogTitle = new JLabel("Trade log · 0 items");
 	private int clogCount;
+	private final JLabel scoreLine = new JLabel("first session — this one sets the bar");
+	private final JPanel scoreSection = new JPanel();
+	private final JPanel itemsBox = new JPanel();
+	private final JPanel itemsSection = new JPanel();
 
 	public RuneAIPanel()
 	{
@@ -90,6 +94,17 @@ public class RuneAIPanel extends PluginPanel
 		container.add(card);
 		container.add(Box.createVerticalStrut(12));
 
+		// beat your last session: the only comparison that grades a session against
+		// something it can actually be judged by — this player's own past sessions
+		scoreLine.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+		scoreLine.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		scoreLine.setAlignmentX(LEFT_ALIGNMENT);
+		scoreLine.setToolTipText("<html>Realized flip profit this session vs your last one and your best.<br>"
+			+ "gp/h is measured over ACTIVE time — first offer placed to now.</html>");
+		buildSection(scoreSection, "Session scoreboard", OK_GREEN, scoreLine);
+		container.add(scoreSection);
+		container.add(Box.createVerticalStrut(12));
+
 		// live GE flip suggestions (tax-aware, from wiki prices API)
 		final JLabel flipTitle = new JLabel("Top GE flips (live)");
 		flipTitle.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 13));
@@ -118,6 +133,19 @@ public class RuneAIPanel extends PluginPanel
 		laneLine.setAlignmentX(LEFT_ALIGNMENT);
 		laneLine.setToolTipText("Fills, win rate and realised gp, counted per lane");
 		container.add(laneLine);
+		container.add(Box.createVerticalStrut(12));
+
+		// what each item has actually paid THIS player — the ranker's opinion is a
+		// forecast, this is the receipt
+		itemsBox.setLayout(new BoxLayout(itemsBox, BoxLayout.Y_AXIS));
+		final JLabel noItems = new JLabel("<html>no flips recorded yet —<br>results appear as you trade</html>");
+		noItems.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		noItems.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
+		noItems.setAlignmentX(LEFT_ALIGNMENT);
+		itemsBox.add(noItems);
+		buildSection(itemsSection, "Per-item results", ACCENT, itemsBox);
+		itemsSection.setToolTipText("Fills, average fill time and realised gp per item, from your own trades");
+		container.add(itemsSection);
 		container.add(Box.createVerticalStrut(12));
 
 		// the hail-mary board — cheap asks parked under the numbers whales type
@@ -187,6 +215,34 @@ public class RuneAIPanel extends PluginPanel
 		container.add(clogGrid);
 
 		add(container, BorderLayout.NORTH);
+	}
+
+	/**
+	 * Title + accented body, laid out into {@code holder} so one
+	 * {@code setVisible} hides the whole section when its config toggle is off.
+	 */
+	private void buildSection(JPanel holder, String titleText, Color accent, java.awt.Component body)
+	{
+		holder.setLayout(new BoxLayout(holder, BoxLayout.Y_AXIS));
+		holder.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		holder.setAlignmentX(LEFT_ALIGNMENT);
+
+		final JLabel t = new JLabel(titleText);
+		t.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 13));
+		t.setForeground(accent);
+		t.setAlignmentX(LEFT_ALIGNMENT);
+		holder.add(t);
+		holder.add(Box.createVerticalStrut(4));
+
+		final JPanel box = new JPanel();
+		box.setLayout(new BoxLayout(box, BoxLayout.Y_AXIS));
+		box.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		box.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(0, 3, 0, 0, accent),
+			BorderFactory.createEmptyBorder(8, 8, 8, 8)));
+		box.setAlignmentX(LEFT_ALIGNMENT);
+		box.add(body);
+		holder.add(box);
 	}
 
 	private JPanel row(String label, JLabel value)
@@ -289,6 +345,129 @@ public class RuneAIPanel extends PluginPanel
 		return String.format("%d fills · %d pulled · %s · %+,d gp%s",
 			l.getFills(), l.getStalls(), win, l.getTotalProfit(),
 			l.getEwmaFillSecs() > 0 ? String.format(" · ~%.0fs", l.getEwmaFillSecs()) : "");
+	}
+
+	/** Show or hide the two results views with their config toggles. */
+	public void setViewsEnabled(boolean sessionScore, boolean itemStats)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			scoreSection.setVisible(sessionScore);
+			itemsSection.setVisible(itemStats);
+		});
+	}
+
+	/**
+	 * This session against the record book. Deliberately states the gap in gp
+	 * rather than a verdict — "1,240 to go" is something you can act on, "worse
+	 * than last time" is not.
+	 */
+	public void setSessionScore(SessionHistory.Scoreboard s)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			if (s.getRanked() == 0)
+			{
+				scoreLine.setText(String.format(
+					"<html>THIS  %s gp · %s/h<br>"
+						+ "<font color='#8a8a8a'>first recorded session — this one sets the bar</font></html>",
+					signed(s.getCurPnl()), compact(s.getCurGpHr())));
+				scoreLine.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+				return;
+			}
+			final String verdict = s.getToBeatBest() == 0
+				? "<font color='#ffc800'>BEST SESSION ON RECORD</font>"
+				: s.getToBeatLast() == 0
+					? String.format("<font color='#00c878'>beating last by %,d</font> · %,d to your best",
+						s.getCurPnl() - s.getLastPnl(), s.getToBeatBest())
+					: String.format("%,d to beat last session", s.getToBeatLast());
+			scoreLine.setText(String.format(
+				"<html>THIS  %s gp · %s/h<br>LAST  %s gp · %s/h<br>BEST  %s gp · %s/h<br>"
+					+ "%s<br><font color='#8a8a8a'>ahead of %d of %d recorded sessions</font></html>",
+				signed(s.getCurPnl()), compact(s.getCurGpHr()),
+				signed(s.getLastPnl()), compact(s.getLastGpHr()),
+				signed(s.getBestPnl()), compact(s.getBestGpHr()),
+				verdict, s.getBeaten(), s.getRanked()));
+			scoreLine.setForeground(Color.WHITE);
+		});
+	}
+
+	/** Per-item receipts: fills, measured fill time, realised gp, split by lane. */
+	public void setItemStats(java.util.List<ItemMemory.ItemStat> stats)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			if (stats == null || stats.isEmpty())
+			{
+				return;
+			}
+			itemsBox.removeAll();
+			for (ItemMemory.ItemStat s : stats)
+			{
+				final JLabel name = new JLabel(s.getName());
+				name.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 11));
+				name.setForeground(Color.WHITE);
+				name.setAlignmentX(LEFT_ALIGNMENT);
+
+				final StringBuilder sub = new StringBuilder();
+				sub.append(s.getFills()).append(s.getFills() == 1 ? " flip" : " flips");
+				if (s.getStalls() > 0)
+				{
+					sub.append(" · ").append(s.getStalls()).append(" pulled");
+				}
+				sub.append(" · ").append(s.getAvgFillSecs() >= 0
+					? "~" + s.getAvgFillSecs() + "s" : "untimed");
+				sub.append(" · ").append(String.format("%+,d", s.getTotalProfit()));
+
+				final JLabel line = new JLabel(sub.toString());
+				line.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+				line.setForeground(s.getTotalProfit() > 0 ? OK_GREEN
+					: s.getTotalProfit() < 0 ? new Color(255, 90, 90) : ColorScheme.LIGHT_GRAY_COLOR);
+				line.setAlignmentX(LEFT_ALIGNMENT);
+				// the lane split only earns a line when the item actually ran in
+				// both lanes — otherwise it is a zero pretending to be information
+				if (s.getQuickFills() > 0 && s.getLongFills() > 0)
+				{
+					line.setToolTipText(String.format("QUICK %d fills %+,d gp · OVERNIGHT %d fills %+,d gp",
+						s.getQuickFills(), s.getQuickProfit(), s.getLongFills(), s.getLongProfit()));
+				}
+				itemsBox.add(name);
+				itemsBox.add(line);
+				if (s.getQuickFills() > 0 && s.getLongFills() > 0)
+				{
+					final JLabel lanes = new JLabel(String.format("quick %d · overnight %d",
+						s.getQuickFills(), s.getLongFills()));
+					lanes.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 9));
+					lanes.setForeground(TRAP);
+					lanes.setAlignmentX(LEFT_ALIGNMENT);
+					itemsBox.add(lanes);
+				}
+				itemsBox.add(Box.createVerticalStrut(5));
+			}
+			itemsBox.revalidate();
+			itemsBox.repaint();
+		});
+	}
+
+	private static String signed(long v)
+	{
+		return String.format("%+,d", v);
+	}
+
+	/** Narrow-panel gp: 24.5k / 1.2m, because the sidebar is ~225px wide. */
+	private static String compact(long v)
+	{
+		final long a = Math.abs(v);
+		final String sign = v < 0 ? "-" : "";
+		if (a >= 1_000_000)
+		{
+			return String.format("%s%.1fm", sign, a / 1_000_000.0);
+		}
+		if (a >= 1_000)
+		{
+			return String.format("%s%.1fk", sign, a / 1_000.0);
+		}
+		return String.valueOf(v);
 	}
 
 	public void setTraps(java.util.List<TrapBoard.Pick> picks, boolean headingOffline)

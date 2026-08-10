@@ -38,12 +38,13 @@ All source lives in `src/main/java/com/runeai/`.
 | `RuneAIOverlay.java` | Draw-only game-view overlay: NPC outlines, animated tile flashes with bobbing arrow, top-center alert banner. Exposes `flashTile()` / `setAlert()`. |
 | `MascotOverlay.java` | Draw-only mascot "Rune" — a movable wisp that bobs, blinks, lip-syncs to live audio amplitude, and shows a speech bubble. |
 | `VoicePlayer.java` | Loads a bundled WAV from resources, plays it on a daemon thread, computes an amplitude envelope, exposes `getMouth()` (0..1) and `getSpeakingText()` for the mascot. Per-key 12s cooldown. |
-| `RuneAIPanel.java` | RuneLite sidebar `PluginPanel` — game state, player, activity (+ gp/xp goal), session P&L, bond fund, NPC/player/event counts, and the Ko-fi button. |
+| `RuneAIPanel.java` | RuneLite sidebar `PluginPanel` — game state, player, activity (+ gp/xp goal), session P&L, session scoreboard, live flips, per-lane and per-item results, trap board, bond fund, NPC/player/event counts, and the Ko-fi button. |
 | `GameStateSnapshot.java` | Static one-shot capture of the whole client state into a `Map` for a JSON dump. **Client thread only.** |
 | `EventLog.java` | Append-only JSONL writer (`{"t":iso,"tick":n,"e":type,...}`), flushes every 50 lines. |
 | `FlipService.java` | Live GE intelligence off the wiki prices API: books, tax-aware margins, trap detection, lane classification, and the velocity ranker. Suggestions only. |
 | `FlipLane.java` | The QUICK / LONG taxonomy — pure classifier plus the volume-based cycle-time prior. |
-| `ItemMemory.java` | Per-item bandit memory persisted to `~/.runelite/runeai/item-memory.json`, with per-lane ledgers and recovery-based cooldown expiry. |
+| `ItemMemory.java` | Per-item bandit memory persisted to `~/.runelite/runeai/item-memory.json`, with per-lane ledgers, recovery-based cooldown expiry, and the per-item results ranking (`rank()`). |
+| `SessionHistory.java` | Per-session result rows in `~/.runelite/runeai/session-history.json` plus the "beat your last session" comparison math. All ranking is `static` and argument-fed, so it tests without a client. |
 | `FillTimeModel.java` | Dot-product inference for `train/flip_model.json`. Gated on that file's `verdict`. |
 | `GeBrain.java` | 7-16-1 tanh forward pass for `~/.runelite/runeai/ge-brain-hist.json`. Gated on `metrics.beats_baseline`. Moves ranking, never a coached price. |
 | `Champion.java` | Evolved policy genome from `~/.runelite/runeai/ge-champion.json`. Gated on `emergent_edge`; every getter falls back to the constant it replaced. |
@@ -117,6 +118,12 @@ RuneLite events ──> RuneAIPlugin (@Subscribe handlers)
   (coins count as 1 gp each). `pnlPaused()` suppresses the ledger while widget groups
   12 / 465 / 192 / 300 (bank, GE, deposit box, shop) are open, because those are transfers, not profit.
   `GameState.LOGIN_SCREEN` clears `lastHolding` only — `sessionPnl` is not reset.
+- **Session scoreboard** — `SessionHistory`; one row per session in `session-history.json`, ranked by
+  realised flip profit. gp/h is measured over ACTIVE time (first offer placed → now) with a one-minute
+  floor, empty sessions are never written, and the live row is never part of its own comparison.
+  Gated on `sessionScore()`.
+- **Per-item results** — `ItemMemory.rank()` → `panel.setItemStats(...)`, top 6 by realised gp. An item
+  never timed reports `untimed` rather than the bandit's 300s starting value. Gated on `itemStats()`.
 - **Voice** — `VoicePlayer.LINES` is the source of truth for the seven keys and their text:
   `idle`, `eat`, `bank`, `loot`, `attacked`, `pot`, `bond`.
 

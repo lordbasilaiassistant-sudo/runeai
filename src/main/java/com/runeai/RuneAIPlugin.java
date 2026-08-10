@@ -118,6 +118,9 @@ public class RuneAIPlugin extends Plugin
 	private TrapBoard trapBoard;
 
 	@Inject
+	private SessionHistory sessionHistory;
+
+	@Inject
 	private net.runelite.client.chat.ChatCommandManager chatCommandManager;
 
 	// trade collection log: items PROFITABLY flipped (real buy->sell) at least once
@@ -154,6 +157,7 @@ public class RuneAIPlugin extends Plugin
 	private long lastFlipScanLogMs;
 	private long lastLoginMs;
 	private long lastSellProfit; // most recent realized sell profit, for item memory
+	private int sessionFills;    // offers completed THIS session — the scoreboard's count
 
 	// ---- TRADER: the flipping skill. profit gp -> xp on the real OSRS curve;
 	// each level raises the max item value you can flip (lvl 99 ~ max cash play)
@@ -283,6 +287,8 @@ public class RuneAIPlugin extends Plugin
 			.panel(panel)
 			.build();
 		sessionStartMs = System.currentTimeMillis();
+		sessionHistory.begin(sessionStartMs);
+		panel.setViewsEnabled(config.sessionScore(), config.itemStats());
 		loadFlipBasis();
 		loadTrader();
 		loadClog();
@@ -317,6 +323,7 @@ public class RuneAIPlugin extends Plugin
 	{
 		chatCommandManager.unregisterCommand("!profit");
 		chatCommandManager.unregisterCommand("!lvl");
+		sessionHistory.finish();
 		clientToolbar.removeNavigation(navButton);
 		overlayManager.remove(overlay);
 		overlayManager.remove(mascot);
@@ -579,6 +586,10 @@ public class RuneAIPlugin extends Plugin
 				}
 				itemMemory.recordFill(o.getItemId(), lane, offlineFill ? -1 : fillSecs,
 					buying ? 0 : lastSellProfit);
+				if (tr.startMs >= sessionStartMs)
+				{
+					sessionFills++; // carryover offers belong to the session that placed them
+				}
 			}
 			if (sug)
 			{
@@ -770,6 +781,20 @@ public class RuneAIPlugin extends Plugin
 				firstOfferMs > 0 ? (System.currentTimeMillis() - firstOfferMs) / 60_000 : 0);
 			panel.setLanes(itemMemory.laneTotals(FlipLane.QUICK),
 				itemMemory.laneTotals(FlipLane.LONG));
+
+			// results views: what this session and each item have ACTUALLY paid
+			panel.setViewsEnabled(config.sessionScore(), config.itemStats());
+			if (config.sessionScore())
+			{
+				panel.setSessionScore(sessionHistory.update(flipRealized, sessionPnl,
+					(int) unitsBought, (int) unitsSold, sessionFills,
+					firstOfferMs > 0 ? System.currentTimeMillis() - firstOfferMs : 0));
+			}
+			if (config.itemStats())
+			{
+				panel.setItemStats(itemMemory.topItems(6,
+					id -> client.getItemDefinition(id).getName()));
+			}
 		}
 
 		panel.setCounts(client.getNpcs().size(), client.getPlayers().size(),

@@ -285,6 +285,75 @@ class ItemMemory
 		return memory.get(itemId);
 	}
 
+	/**
+	 * One item's line in the per-item results view: what this player actually got
+	 * out of it, not what the market says it is worth.
+	 */
+	@lombok.Value
+	static class ItemStat
+	{
+		int itemId;
+		String name;
+		int fills;
+		int stalls;
+		long avgFillSecs;   // -1 when no fill was ever timed (offline fills only)
+		long totalProfit;
+		int quickFills;
+		int longFills;
+		long quickProfit;
+		long longProfit;
+	}
+
+	/**
+	 * The per-item results table, ranked by what each item has actually paid.
+	 *
+	 * <p>Static and fed its own map so the ranking can be tested without a
+	 * client, a data directory, or this player's real trade history.
+	 *
+	 * @param namer item id -> display name; the caller owns that lookup because
+	 *              it needs the client
+	 */
+	static java.util.List<ItemStat> rank(Map<Integer, Stats> mem, int limit,
+		java.util.function.IntFunction<String> namer)
+	{
+		final java.util.List<Map.Entry<Integer, Stats>> traded = new java.util.ArrayList<>();
+		for (Map.Entry<Integer, Stats> e : mem.entrySet())
+		{
+			final Stats s = e.getValue();
+			if (s != null && (s.fills > 0 || s.stalls > 0))
+			{
+				traded.add(e);
+			}
+		}
+		traded.sort(java.util.Comparator
+			.comparingLong((Map.Entry<Integer, Stats> e) -> e.getValue().totalProfit).reversed()
+			.thenComparing(e -> -e.getValue().fills));
+		final java.util.List<ItemStat> out = new java.util.ArrayList<>();
+		// name lookups need the client, so only the rows that will be SHOWN pay for
+		// one — this runs on the tick loop against every item ever traded
+		for (Map.Entry<Integer, Stats> e : traded.subList(0, Math.min(Math.max(0, limit), traded.size())))
+		{
+			final Stats s = e.getValue();
+			final Lane q = s.quick == null ? new Lane() : s.quick;
+			final Lane l = s.overnight == null ? new Lane() : s.overnight;
+			// the aggregate EWMA is the QUICK lane's clock by construction, so an
+			// item only ever traded overnight reports the long lane's number
+			// instead of a 300s default it never earned
+			final long avg = q.fills > 0 ? (long) s.ewmaFillSecs
+				: l.fills > 0 && l.ewmaFillSecs > 0 ? (long) l.ewmaFillSecs
+				: -1;
+			out.add(new ItemStat(e.getKey(), namer.apply(e.getKey()), s.fills, s.stalls,
+				avg, s.totalProfit, q.fills, l.fills, q.totalProfit, l.totalProfit));
+		}
+		return out;
+	}
+
+	/** Live per-item results for the panel. */
+	java.util.List<ItemStat> topItems(int limit, java.util.function.IntFunction<String> namer)
+	{
+		return rank(memory, limit, namer);
+	}
+
 	/** Whole-lane totals for the ledger the panel and overlay show. */
 	Lane laneTotals(FlipLane lane)
 	{

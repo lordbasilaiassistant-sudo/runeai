@@ -198,6 +198,26 @@ public interface RuneAIConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "sessionScore",
+		name = "Session scoreboard",
+		description = "Rank this session's realised flip profit against your last session and your best one, from .runelite/runeai/session-history.json"
+	)
+	default boolean sessionScore()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "itemStats",
+		name = "Per-item results",
+		description = "Show what each item has actually paid you — flips, measured fill time, realised gp — instead of only what the ranker predicts"
+	)
+	default boolean itemStats()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "recordTicks",
 		name = "Record tick vectors",
 		description = "Write a fixed-shape state record every game tick to .runelite/runeai/ticks-*.jsonl — NN training data (restart plugin to apply)"
