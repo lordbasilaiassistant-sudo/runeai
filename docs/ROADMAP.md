@@ -173,7 +173,7 @@ flip, loot call and close call is a structured event. Fed to an LLM brain,
 that becomes **live stream commentary** while the human plays: a co-host that
 actually knows the run ("third rune scim drop this hour — the ledger says
 that pays for the bond by Friday"). RuneLite window as the only OBS source =
-one-click Twitch setup. Voice via the existing local Kokoro pipeline.
+one-click Twitch setup. Voice via the existing local Kokoro pipeline ($0, offline), or ElevenLabs for premium streamer voices (user brings their own key).
 Strictly opt-in, default off, nothing leaves the machine unless enabled.
 
 ## Phase 3 — Distribution (later)
