@@ -32,8 +32,11 @@ public class GeFlipOverlay extends Overlay
 	private volatile long medBuySecs = -1, medSellSecs = -1;
 	private volatile int sugFills, sugCancels;
 
-	void setStats(int active, int total, long medBuy, long medSell, int fills, int cancels)
+	private volatile long flipGpHr;
+
+	void setStats(int active, int total, long medBuy, long medSell, int fills, int cancels, long gpHr)
 	{
+		flipGpHr = gpHr;
 		activeSlots = active;
 		totalSlots = total;
 		medBuySecs = medBuy;
@@ -140,8 +143,8 @@ public class GeFlipOverlay extends Overlay
 		if (medBuySecs >= 0 || medSellSecs >= 0 || sugFills + sugCancels > 0)
 		{
 			g.setColor(Color.LIGHT_GRAY);
-			g.drawString(String.format("fills: buy ~%ss · sell ~%ss · calls %d✓/%d✗",
-				medBuySecs < 0 ? "?" : medBuySecs, medSellSecs < 0 ? "?" : medSellSecs,
+			g.drawString(String.format("gp/h %,d · fills b~%ss s~%ss · calls %d✓/%d✗",
+				flipGpHr, medBuySecs < 0 ? "?" : medBuySecs, medSellSecs < 0 ? "?" : medSellSecs,
 				sugFills, sugCancels), 10, 44);
 		}
 
@@ -181,8 +184,8 @@ public class GeFlipOverlay extends Overlay
 			g.drawString(trunc(f.getName(), 26), 10, y);
 			g.setFont(g.getFont().deriveFont(Font.PLAIN, 11f));
 			g.setColor(GOLD);
-			g.drawString(String.format("buy %,d  →  sell %,d   +%,d (%.1f%%)",
-				f.getBuyAt(), f.getSellAt(), f.getNet(), f.getRoi()), 10, y + 13);
+			g.drawString(String.format("buy %,d → sell %,d  +%,d  ~%,.0f/hr traded",
+				f.getBuyAt(), f.getSellAt(), f.getNet(), f.getUnitsHr() * 20), 10, y + 13);
 			y += 27;
 		}
 		return new Dimension(W, h);

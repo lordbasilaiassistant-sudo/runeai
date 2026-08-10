@@ -202,6 +202,12 @@ class FlipService
 				}
 				final int high = q.get("high").getAsInt();
 				final int low = q.get("low").getAsInt();
+				// stale-spread guard: both sides must have traded RECENTLY, or the
+				// "margin" is a mirage nobody is actually paying (0/100 fills)
+				final long nowS = System.currentTimeMillis() / 1000;
+				final long highT = q.has("highTime") && !q.get("highTime").isJsonNull() ? q.get("highTime").getAsLong() : 0;
+				final long lowT = q.has("lowTime") && !q.get("lowTime").isJsonNull() ? q.get("lowTime").getAsLong() : 0;
+				final boolean fresh = nowS - highT < 600 && nowS - lowT < 600;
 				long vol = 0;
 				final JsonElement v5 = five.get(e.getKey());
 				if (v5 != null)
@@ -211,18 +217,19 @@ class FlipService
 						+ (v.has("lowPriceVolume") ? v.get("lowPriceVolume").getAsLong() : 0);
 				}
 				quotes.put(id, new long[]{low + 1, high - 1, vol * 12});
-				if (low < 100 || vol < 10)
+				if (low < 100 || vol < 30 || !fresh)
 				{
 					continue;
 				}
 				final int buyAt = low + 1;
 				final int sellAt = high - 1;
 				final int net = sellAt - geTax(sellAt) - buyAt;
-				if (net <= 0)
+				// ROI over 30% on a liquid item = stale outlier price, not free money
+				if (net <= 0 || net * 100.0 / buyAt > 30)
 				{
 					continue;
 				}
-				final double unitsHr = Math.min(limits.get(id)[0] / 4.0, vol * 12 * 0.10);
+				final double unitsHr = Math.min(limits.get(id)[0] / 4.0, vol * 12 * 0.05);
 				flips.add(new Flip(id, name, buyAt, sellAt, net,
 					net * 100.0 / buyAt, (long) (net * unitsHr), unitsHr,
 					membersItem.getOrDefault(id, true)));

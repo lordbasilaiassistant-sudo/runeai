@@ -97,6 +97,9 @@ public class RuneAIPlugin extends Plugin
 	private GeFlipOverlay geFlipOverlay;
 
 	@Inject
+	private GeSlotStampOverlay geSlotStampOverlay;
+
+	@Inject
 	private VoicePlayer voice;
 
 	@Inject
@@ -124,6 +127,7 @@ public class RuneAIPlugin extends Plugin
 	private final List<Long> buyFillSecs = new ArrayList<>();
 	private final List<Long> sellFillSecs = new ArrayList<>();
 	private int sugFills, sugCancels;
+	private long firstOfferMs;
 
 
 	private Gson prettyGson;
@@ -218,6 +222,7 @@ public class RuneAIPlugin extends Plugin
 		overlayManager.add(overlay);
 		overlayManager.add(mascot);
 		overlayManager.add(geFlipOverlay);
+		overlayManager.add(geSlotStampOverlay);
 		log.info("RuneAI plugin started (data dir {})", DATA_DIR.getAbsolutePath());
 	}
 
@@ -228,6 +233,7 @@ public class RuneAIPlugin extends Plugin
 		overlayManager.remove(overlay);
 		overlayManager.remove(mascot);
 		overlayManager.remove(geFlipOverlay);
+		overlayManager.remove(geSlotStampOverlay);
 		if (eventLog != null)
 		{
 			eventLog.close();
@@ -333,6 +339,10 @@ public class RuneAIPlugin extends Plugin
 		final long nowMs = System.currentTimeMillis();
 
 		// lifecycle: new offer starts the clock, completion/cancel reads it
+		if (firstOfferMs == 0)
+		{
+			firstOfferMs = nowMs;
+		}
 		OfferTrack tr = offerTracks[slot];
 		if (st == net.runelite.api.GrandExchangeOfferState.BUYING
 			|| st == net.runelite.api.GrandExchangeOfferState.SELLING)
@@ -450,8 +460,11 @@ public class RuneAIPlugin extends Plugin
 					active++;
 				}
 			}
+			final long flipGpHr = firstOfferMs > 0
+				? flipRealized * 3600_000L / Math.max(60_000, System.currentTimeMillis() - firstOfferMs)
+				: 0;
 			geFlipOverlay.setStats(active, slots, median(buyFillSecs), median(sellFillSecs),
-				sugFills, sugCancels);
+				sugFills, sugCancels, flipGpHr);
 		}
 
 		panel.setCounts(client.getNpcs().size(), client.getPlayers().size(),
