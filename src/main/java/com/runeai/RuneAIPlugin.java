@@ -648,6 +648,7 @@ public class RuneAIPlugin extends Plugin
 				final Map<String, Object> d = m();
 				d.put("suggestions", sugg);
 				d.put("budget", coins);
+				d.put("marketSurprise", flipService.lastScanAvgErr);
 				emit("flipScan", d);
 			}
 			geFlipOverlay.setTrader(traderLevel,

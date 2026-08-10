@@ -41,6 +41,8 @@ class FlipService
 	private final Map<Integer, Boolean> membersItem = new ConcurrentHashMap<>();
 	private volatile List<Flip> allFlips = List.of();
 	private final Map<Integer, long[]> quotes = new ConcurrentHashMap<>(); // id -> {buyAt, sellAt, volHr}
+	private final Map<Integer, Long> predictedMid = new ConcurrentHashMap<>(); // last scan's forecast
+	volatile double lastScanAvgErr = -1; // global market-surprise gauge, logged each scan
 	private final AtomicLong lastRefresh = new AtomicLong();
 	private volatile long budget = -1;       // carried coins; -1 = unknown
 	private volatile boolean f2pOnly;
@@ -205,6 +207,8 @@ class FlipService
 			final JsonObject latest = gson.fromJson(latestBody, JsonObject.class).getAsJsonObject("data");
 			final JsonObject five = gson.fromJson(fiveBody, JsonObject.class).getAsJsonObject("data");
 			final List<Flip> flips = new ArrayList<>();
+			double errSum = 0;
+			int errN = 0;
 			for (Map.Entry<String, JsonElement> e : latest.entrySet())
 			{
 				final JsonObject q = e.getValue().getAsJsonObject();
@@ -234,6 +238,18 @@ class FlipService
 					vol = (v.has("highPriceVolume") ? v.get("highPriceVolume").getAsLong() : 0)
 						+ (v.has("lowPriceVolume") ? v.get("lowPriceVolume").getAsLong() : 0);
 				}
+				// PREDICT -> SCORE -> PUNISH: last scan forecast "mid holds";
+				// grade it now, demote items that surprised us (negative reward)
+				final long mid = (high + low) / 2;
+				final Long pred = predictedMid.get(id);
+				if (pred != null && pred > 0)
+				{
+					final double err = Math.abs(mid - pred) / (double) pred;
+					itemMemory.recordPredictionError(id, err);
+					errSum += err;
+					errN++;
+				}
+				predictedMid.put(id, mid);
 				quotes.put(id, new long[]{low + 1, high - 1, vol * 12});
 				if (low < 100 || vol < 30 || !fresh)
 				{
@@ -254,7 +270,9 @@ class FlipService
 			}
 			flips.sort(Comparator.comparingLong(f -> -f.gpHr));
 			allFlips = flips;
-			log.info("flip scan: {} candidates", flips.size());
+			lastScanAvgErr = errN > 0 ? errSum / errN : -1;
+			log.info("flip scan: {} candidates, market surprise {}",
+				flips.size(), lastScanAvgErr >= 0 ? String.format("%.2f%%", lastScanAvgErr * 100) : "n/a");
 		}));
 	}
 

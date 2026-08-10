@@ -41,6 +41,7 @@ class ItemMemory
 		long lastFillMs;
 		long lastStallMs;
 		long totalProfit;
+		double ewmaPredErr;     // market predictability: how much mid moves vs our forecast
 	}
 
 	@Inject
@@ -64,6 +65,14 @@ class ItemMemory
 			s.totalProfit += profit;
 		}
 		s.lastFillMs = System.currentTimeMillis();
+		save();
+	}
+
+	/** Negative reward: the market moved against our forecast for this item. */
+	void recordPredictionError(int itemId, double relErr)
+	{
+		final Stats s = memory.computeIfAbsent(itemId, k -> new Stats());
+		s.ewmaPredErr = s.ewmaPredErr * 0.7 + relErr * 0.3;
 		save();
 	}
 
@@ -110,6 +119,12 @@ class ItemMemory
 			{
 				m *= 0.5;  // it has actually burned this player before
 			}
+		}
+		// unpredictable markets are where margins evaporate mid-flip:
+		// >3% average surprise between scans halves the score
+		if (s.ewmaPredErr > 0)
+		{
+			m *= 1.0 / (1.0 + 15.0 * s.ewmaPredErr);
 		}
 		return m;
 	}
