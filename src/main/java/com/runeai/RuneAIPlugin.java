@@ -143,6 +143,8 @@ public class RuneAIPlugin extends Plugin
 	private int sugFills, sugCancels;
 	private long unitsBought, unitsSold;
 	private long firstOfferMs;
+	private long sessionStartMs;
+	private long lifetimeRealized; // persists in trader.json — all-time flip profit
 	private long lastFlipScanLogMs;
 	private long lastLoginMs;
 	private long lastSellProfit; // most recent realized sell profit, for item memory
@@ -274,6 +276,7 @@ public class RuneAIPlugin extends Plugin
 			.priority(1)
 			.panel(panel)
 			.build();
+		sessionStartMs = System.currentTimeMillis();
 		loadFlipBasis();
 		loadTrader();
 		loadClog();
@@ -419,10 +422,6 @@ public class RuneAIPlugin extends Plugin
 		final long nowMs = System.currentTimeMillis();
 
 		// lifecycle: new offer starts the clock, completion/cancel reads it
-		if (firstOfferMs == 0)
-		{
-			firstOfferMs = nowMs;
-		}
 		OfferTrack tr = offerTracks[slot];
 		if (st == net.runelite.api.GrandExchangeOfferState.BUYING
 			|| st == net.runelite.api.GrandExchangeOfferState.SELLING)
@@ -446,6 +445,11 @@ public class RuneAIPlugin extends Plugin
 				}
 				offerTracks[slot] = tr;
 				saveOfferState();
+				// session pph clock starts at the first offer PLACED this session
+				if (firstOfferMs == 0 && tr.startMs >= sessionStartMs)
+				{
+					firstOfferMs = nowMs;
+				}
 			}
 		}
 
@@ -458,11 +462,17 @@ public class RuneAIPlugin extends Plugin
 			if (dQty > 0)
 			{
 				tr.lastFillMs = nowMs;
+				// carryover = offer placed before this session: books to LIFETIME,
+				// never distorts this session's P&L or gp/h
+				final boolean carryover = tr.startMs < sessionStartMs;
 				if (buying)
 				{
 					flipBasis.merge(o.getItemId(), new long[]{dQty, dCoins},
 						(a, b) -> new long[]{a[0] + b[0], a[1] + b[1]});
-					unitsBought += dQty;
+					if (!carryover)
+					{
+						unitsBought += dQty;
+					}
 				}
 				else
 				{
@@ -493,8 +503,12 @@ public class RuneAIPlugin extends Plugin
 					final long tax = (long) FlipService.geTax(o.getPrice()) * dQty;
 					final long profit = gross - tax - cost;
 					lastSellProfit = profit;
-					flipRealized += profit;
-					unitsSold += dQty;
+					lifetimeRealized += profit;
+					if (!carryover)
+					{
+						flipRealized += profit;
+						unitsSold += dQty;
+					}
 					panel.setFlipPnl(flipRealized);
 
 					// TRADE COLLECTION LOG: first profitable real buy->sell of an item
@@ -682,7 +696,7 @@ public class RuneAIPlugin extends Plugin
 			}
 			geSlotStampOverlay.setOfferStarts(starts, placed);
 			geFlipOverlay.setStats(active, slots, median(buyFillSecs), median(sellFillSecs),
-				sugFills, sugCancels, flipGpHr, flipRealized,
+				sugFills, sugCancels, flipGpHr, flipRealized, lifetimeRealized,
 				(int) unitsBought, (int) unitsSold,
 				firstOfferMs > 0 ? (System.currentTimeMillis() - firstOfferMs) / 60_000 : 0);
 		}
@@ -875,6 +889,10 @@ public class RuneAIPlugin extends Plugin
 				final Map<?, ?> raw = gson.fromJson(
 					new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8), Map.class);
 				traderXp = ((Number) raw.get("xp")).doubleValue();
+				if (raw.get("lifetime") != null)
+				{
+					lifetimeRealized = ((Number) raw.get("lifetime")).longValue();
+				}
 				traderLevel = traderLevelFor(traderXp);
 			}
 		}
@@ -889,7 +907,8 @@ public class RuneAIPlugin extends Plugin
 		try
 		{
 			Files.write(new File(DATA_DIR, "trader.json").toPath(),
-				gson.toJson(Map.of("xp", traderXp)).getBytes(StandardCharsets.UTF_8));
+				gson.toJson(Map.of("xp", traderXp, "lifetime", lifetimeRealized))
+					.getBytes(StandardCharsets.UTF_8));
 		}
 		catch (Exception ex)
 		{

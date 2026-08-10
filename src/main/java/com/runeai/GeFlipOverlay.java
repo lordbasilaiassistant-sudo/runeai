@@ -49,9 +49,12 @@ public class GeFlipOverlay extends Overlay
 		traderPct = pct;
 	}
 
+	private volatile long lifetime;
+
 	void setStats(int active, int total, long medBuy, long medSell, int fills, int cancels,
-		long gpHr, long realizedPnl, int buyCount, int sellCount, long sessMin)
+		long gpHr, long realizedPnl, long lifetimePnl, int buyCount, int sellCount, long sessMin)
 	{
+		lifetime = lifetimePnl;
 		flipGpHr = gpHr;
 		realized = realizedPnl;
 		buys = buyCount;
@@ -236,8 +239,8 @@ public class GeFlipOverlay extends Overlay
 		g.drawString(String.format("SESSION %+,d gp · %,d gp/h", realized, flipGpHr), 10, y + 12);
 		g.setFont(g.getFont().deriveFont(Font.PLAIN, 12f));
 		g.setColor(Color.LIGHT_GRAY);
-		g.drawString(String.format("%d bought · %d sold · calls %d✓/%d✗ · %dm",
-			buys, sells, sugFills, sugCancels, sessionMin), 10, y + 27);
+		g.drawString(String.format("%d bought · %d sold · calls %d✓/%d✗ · %dm · life %+,d",
+			buys, sells, sugFills, sugCancels, sessionMin, lifetime), 10, y + 27);
 		g.setFont(g.getFont().deriveFont(Font.BOLD, 13f));
 		g.setColor(new Color(140, 200, 255));
 		g.drawString(String.format("Trader lvl %d · %.0f%% to %d", traderLvl,
