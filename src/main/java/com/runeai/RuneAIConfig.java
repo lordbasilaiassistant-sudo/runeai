@@ -168,6 +168,36 @@ public interface RuneAIConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "flipLanes",
+		name = "Quick-flip lane first",
+		description = "Split suggestions into QUICK (fills in minutes, compounds during a session) and OVERNIGHT (patience orders). Session suggestions come from the quick lane only"
+	)
+	default boolean flipLanes()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "quickCycleSecs",
+		name = "Quick cycle ceiling (s)",
+		description = "Longest full buy-then-sell cycle that still counts as a quick flip. Anything slower is an overnight candidate"
+	)
+	default int quickCycleSecs()
+	{
+		return 300;
+	}
+
+	@ConfigItem(
+		keyName = "overnightMode",
+		name = "Heading offline",
+		description = "Flip this on before you log out: every free slot becomes a patience order instead of just the reserved trap slots, because a held slot costs nothing while you are away"
+	)
+	default boolean overnightMode()
+	{
+		return false;
+	}
+
+	@ConfigItem(
 		keyName = "recordTicks",
 		name = "Record tick vectors",
 		description = "Write a fixed-shape state record every game tick to .runelite/runeai/ticks-*.jsonl — NN training data (restart plugin to apply)"

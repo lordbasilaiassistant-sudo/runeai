@@ -61,9 +61,12 @@ public class GeFlipOverlay extends Overlay
 		pendingSells = p;
 	}
 
-	void setTraps(java.util.List<TrapBoard.Pick> t)
+	private volatile boolean overnight;
+
+	void setTraps(java.util.List<TrapBoard.Pick> t, boolean headingOffline)
 	{
 		traps = t;
+		overnight = headingOffline;
 	}
 
 	void setStats(int active, int total, long medBuy, long medSell, int fills, int cancels,
@@ -163,10 +166,12 @@ public class GeFlipOverlay extends Overlay
 			}
 		}
 		final int freeSlots = Math.max(0, totalSlots - activeSlots);
-		final int rows = freeSlots == 0 ? 0 : Math.min(3, top.size());
+		// heading offline flips the emphasis: the board takes the space, the quick
+		// lane keeps one line so a genuinely fast flip is still visible
+		final int rows = freeSlots == 0 ? 0 : Math.min(overnight ? 1 : 3, top.size());
 		final int shown = Math.min(pos.size(), 6);
 		final java.util.List<TrapBoard.Pick> tp = traps;
-		final int trapRows = freeSlots == 0 ? 0 : Math.min(2, tp.size());
+		final int trapRows = freeSlots == 0 ? 0 : Math.min(overnight ? 4 : 2, tp.size());
 
 		final int h = 48 + (pendingSells.isEmpty() ? 0 : pendingSells.size() * 16)
 			+ (shown > 0 ? 15 + shown * 18 : 0)
@@ -224,13 +229,16 @@ public class GeFlipOverlay extends Overlay
 		{
 			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 11));
 			g.setColor(GOLD);
-			g.drawString("SUGGESTED", 8, y);
+			g.drawString(config.flipLanes() ? "QUICK LANE" : "SUGGESTED", 8, y);
 			y += 15;
 			for (int i = 0; i < rows; i++)
 			{
 				final FlipService.Flip f = top.get(i);
 				g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 12));
-				final String rest = String.format("%,d  +%d/ea", f.getBuyAt(), f.getNet());
+				// the cycle time IS the pitch in this lane — a 2gp margin that turns
+				// over every 40s beats a 50gp margin that sits for eight minutes
+				final String rest = String.format("%,d  +%d/ea  ~%ds",
+					f.getBuyAt(), f.getNet(), f.getCycleSecs());
 				final int restW = g.getFontMetrics().stringWidth(rest);
 				g.setColor(GOLD);
 				g.drawString(rest, W - 8 - restW, y);
@@ -246,7 +254,9 @@ public class GeFlipOverlay extends Overlay
 			// the hail-mary board: cheap tickets parked under the numbers whales type
 			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 11));
 			g.setColor(TRAP);
-			g.drawString("OVERNIGHT TRAPS · park & log off", 8, y);
+			g.drawString(overnight
+				? "HEADING OFFLINE · fill every slot"
+				: "OVERNIGHT TRAPS · park & log off", 8, y);
 			y += 15;
 			for (int i = 0; i < trapRows; i++)
 			{

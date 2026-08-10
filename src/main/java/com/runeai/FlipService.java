@@ -65,11 +65,20 @@ class FlipService
 	private volatile boolean f2pOnly;
 	private volatile long traderMaxPrice = Long.MAX_VALUE;
 	private volatile int traderLevel = 1;
+	private volatile long quickCeilingSecs = FlipLane.DEFAULT_QUICK_CYCLE_SECS;
+	private volatile boolean lanesOn = true;
 
 	void setTraderTier(int level, long maxPrice)
 	{
 		traderLevel = level;
 		traderMaxPrice = maxPrice;
+	}
+
+	/** Lane boundary from config; the plugin pushes it in with the other context. */
+	void setLaneConfig(boolean enabled, long quickCycleSecs)
+	{
+		lanesOn = enabled;
+		quickCeilingSecs = Math.max(30, quickCycleSecs);
 	}
 
 	@Value
@@ -84,6 +93,8 @@ class FlipService
 		long gpHr;
 		double unitsHr;
 		boolean members;
+		long cycleSecs;
+		FlipLane lane;
 	}
 
 	private final ItemMemory itemMemory;
@@ -111,6 +122,10 @@ class FlipService
 		final List<Flip> out = new ArrayList<>();
 		for (Flip f : allFlips)
 		{
+			if (lanesOn && f.getLane() != FlipLane.QUICK)
+			{
+				continue; // the session lane is the quick lane; patience lives on the board
+			}
 			if (f2pOnly && f.isMembers())
 			{
 				continue;
@@ -139,12 +154,76 @@ class FlipService
 		for (Flip f : top)
 		{
 			suggested.put(f.getItemId(), new long[]{f.getBuyAt(), f.getSellAt(), now});
+			noteLane(f.getItemId(), f.getLane());
 		}
 		return top;
 	}
 
 	// suggestion attribution: did the user trade what we showed, near our price?
 	private final Map<Integer, long[]> suggested = new ConcurrentHashMap<>(); // id -> {buy, sell, whenMs}
+	// which lane we proposed an item UNDER, so its outcome is booked to that lane
+	// even after the live book has moved on
+	private final Map<Integer, long[]> suggestedLane = new ConcurrentHashMap<>(); // id -> {ordinal, whenMs}
+
+	private void noteLane(int itemId, FlipLane lane)
+	{
+		suggestedLane.put(itemId, new long[]{lane.ordinal(), System.currentTimeMillis()});
+	}
+
+	/** The trap board proposes its picks outside the ranker — tag them too. */
+	void notePatienceOrder(int itemId)
+	{
+		noteLane(itemId, FlipLane.LONG);
+	}
+
+	/**
+	 * The lane an offer on this item belongs to. A lane we actually proposed wins
+	 * for an hour; after that (or for an item we never suggested) the live book
+	 * decides, which is the same rule the ranker uses.
+	 */
+	FlipLane laneFor(int itemId)
+	{
+		final long[] s = suggestedLane.get(itemId);
+		if (s != null && System.currentTimeMillis() - s[1] < 60 * 60_000)
+		{
+			return s[0] == FlipLane.LONG.ordinal() ? FlipLane.LONG : FlipLane.QUICK;
+		}
+		final long[] bk = books.get(itemId);
+		if (bk == null)
+		{
+			return FlipLane.QUICK;
+		}
+		return FlipLane.classify(estCycleSecs(itemId, bk[2]), bk[0], bk[1], bk[2], quickCeilingSecs);
+	}
+
+	/**
+	 * Seconds for a full buy-then-sell cycle of this item.
+	 *
+	 * <p>This player's own measured fills win where they exist — a confidence blend
+	 * over the volume prior, so two fills nudge and ten fills decide. With no
+	 * history at all it is the prior alone, which is a shape, not a measurement.
+	 */
+	long estCycleSecs(int itemId, long vol5m)
+	{
+		final long prior = FlipLane.priorCycleSecs(vol5m);
+		final long observed = itemMemory.observedCycleSecs(itemId);
+		if (observed <= 0)
+		{
+			return prior;
+		}
+		final ItemMemory.Stats st = itemMemory.statsFor(itemId);
+		final double conf = st.getFills() / (st.getFills() + 3.0);
+		return (long) Math.max(1, (1 - conf) * prior + conf * observed);
+	}
+
+	/** Last scan's cycle estimate, or -1 if the item was not in it. */
+	long cycleSecsFor(int itemId)
+	{
+		final Long c = cycleSecs.get(itemId);
+		return c == null ? -1 : c;
+	}
+
+	private final Map<Integer, Long> cycleSecs = new ConcurrentHashMap<>();
 
 	/**
 	 * Live quote + qty/profit coaching for ANY item (the offer-setup coach).
@@ -378,7 +457,8 @@ class FlipService
 				final long cappedSell = Math.min(high - 1L, (long) (low * MAX_QUOTE_MULT));
 				books.put(id, new long[]{low, high, vol, highT});
 				quotes.put(id, new long[]{low + 1, Math.max(low + 1, cappedSell), vol * 12});
-				if (trapBook(low, high, vol))
+				final boolean trap = trapBook(low, high, vol);
+				if (trap)
 				{
 					trapItems.add(id);
 				}
@@ -386,13 +466,24 @@ class FlipService
 				{
 					trapItems.remove(id);
 				}
+				final int buyAt = low + 1;
+				final int sellAt = (int) Math.max(buyAt, cappedSell);
+				final int net = sellAt - geTax(sellAt) - buyAt;
+				final long cyc = estCycleSecs(id, vol);
+				cycleSecs.put(id, cyc);
+				final FlipLane lane = FlipLane.classify(cyc, low, high, vol, quickCeilingSecs);
+				// RECOVERY, not a clock: an item this player gave up on becomes
+				// suggestible again the moment its own book shows it cycling for a
+				// profit at a reasonable speed for a few scans running.
+				itemMemory.recordBookHealth(id, fresh && !trap && vol >= THIN_VOL_5M
+					&& net > 0 && lane == FlipLane.QUICK);
 				// Trap items are never spread grinds. Today the liquidity+freshness
 				// filters below already keep all 76 known whale-corridor items out of
 				// the ranking (measured), but that is a side effect of thresholds the
 				// ranking work will keep re-tuning — so say it outright here. Judged
 				// on THIS scan only: an item whose book recovers is eligible again on
 				// the very next refresh.
-				if (trapBook(low, high, vol))
+				if (trap)
 				{
 					continue;
 				}
@@ -400,9 +491,6 @@ class FlipService
 				{
 					continue;
 				}
-				final int buyAt = low + 1;
-				final int sellAt = (int) Math.max(buyAt, cappedSell);
-				final int net = sellAt - geTax(sellAt) - buyAt;
 				// ROI over 30% on a liquid item = stale outlier price, not free money
 				if (net <= 0 || net * 100.0 / buyAt > 30)
 				{
@@ -411,10 +499,11 @@ class FlipService
 				final double unitsHr = Math.min(limits.get(id)[0] / 4.0, vol * 12 * 0.05);
 				flips.add(new Flip(id, name, buyAt, sellAt, net,
 					net * 100.0 / buyAt, (long) (net * unitsHr), unitsHr,
-					membersItem.getOrDefault(id, true)));
+					membersItem.getOrDefault(id, true), cyc, lane));
 			}
 			flips.sort(Comparator.comparingLong(f -> -f.gpHr));
 			allFlips = flips;
+			itemMemory.flush(); // one write for the whole scan's memory updates
 			lastScanAvgErr = errN > 0 ? errSum / errN : -1;
 			log.info("flip scan: {} candidates, market surprise {}",
 				flips.size(), lastScanAvgErr >= 0 ? String.format("%.2f%%", lastScanAvgErr * 100) : "n/a");

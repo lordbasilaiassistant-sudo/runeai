@@ -19,6 +19,14 @@ import net.runelite.client.RuneLite;
  * mean fresh results dominate and stale patterns fade — an item that
  * "works" keeps getting suggested until it measurably stops working.
  * This is online learning (a contextual bandit), running live.
+ *
+ * <p>Outcomes are booked per {@link FlipLane}: the aggregate speed/score fields
+ * are the QUICK lane's bandit and only quick-lane results move them, while the
+ * long lane keeps its own ledger. A patience order that filled overnight, or one
+ * the player pulled, says nothing about how fast the item cycles in a session.
+ *
+ * <p>The persisted shape stays {@code {"<itemId>": Stats}} so older files load
+ * unchanged; the lane ledgers are new fields inside {@code Stats}.
  */
 @Slf4j
 @Singleton
@@ -27,9 +35,29 @@ class ItemMemory
 	private static final File FILE = new File(new File(RuneLite.RUNELITE_DIR, "runeai"), "item-memory.json");
 	private static final double ALPHA = 0.3;            // EWMA: recent flips dominate
 	private static final long STALL_PENALTY_MS = 20 * 60_000;
+	/**
+	 * Consecutive healthy scans that end a cooldown early. At one scan a minute
+	 * this is three minutes of the book measurably cycling for a profit — the
+	 * point of the rule is that the cooldown ends on EVIDENCE, not on a clock.
+	 */
+	private static final int RECOVERY_SCANS = 3;
 
 	private final Gson gson;
 	private final Map<Integer, Stats> memory = new ConcurrentHashMap<>();
+	private volatile boolean dirty;
+
+	/** One lane's outcome ledger for one item. */
+	@Data
+	static class Lane
+	{
+		int fills;
+		int stalls;
+		int wins;               // completed sells that made money
+		int losses;             // completed sells that lost money
+		double ewmaFillSecs = 300;
+		long totalProfit;
+		long lastFillMs;
+	}
 
 	@Data
 	static class Stats
@@ -42,6 +70,12 @@ class ItemMemory
 		long lastStallMs;
 		long totalProfit;
 		double ewmaPredErr;     // market predictability: how much mid moves vs our forecast
+		long lastFillSecs;      // the last DURATION actually measured, not the EWMA
+		long cooldownClearedMs; // a measured recovery after lastStallMs lifts the penalty
+		int healthyScans;       // consecutive scans showing a profitable, liquid book
+		int recoveries;         // how many times this item earned its way back
+		Lane quick = new Lane();
+		Lane overnight = new Lane();
 	}
 
 	@Inject
@@ -51,20 +85,56 @@ class ItemMemory
 		load();
 	}
 
-	void recordFill(int itemId, long fillSecs, long profit)
+	private Lane laneOf(Stats s, FlipLane lane)
+	{
+		if (lane == FlipLane.LONG)
+		{
+			if (s.overnight == null)
+			{
+				s.overnight = new Lane();
+			}
+			return s.overnight;
+		}
+		if (s.quick == null)
+		{
+			s.quick = new Lane();
+		}
+		return s.quick;
+	}
+
+	void recordFill(int itemId, FlipLane lane, long fillSecs, long profit)
 	{
 		final Stats s = memory.computeIfAbsent(itemId, k -> new Stats());
+		final Lane l = laneOf(s, lane);
 		s.fills++;
+		l.fills++;
+		if (profit > 0)
+		{
+			l.wins++;
+		}
+		else if (profit < 0)
+		{
+			l.losses++;
+		}
 		if (fillSecs >= 0) // offline fills (-1): unknown duration, skip speed stats
 		{
-			s.ewmaFillSecs = s.ewmaFillSecs * (1 - ALPHA) + fillSecs * ALPHA;
+			l.ewmaFillSecs = l.ewmaFillSecs * (1 - ALPHA) + fillSecs * ALPHA;
+			// only the quick lane's own results are allowed to move the speed
+			// number the quick ranker reads
+			if (lane == FlipLane.QUICK)
+			{
+				s.ewmaFillSecs = s.ewmaFillSecs * (1 - ALPHA) + fillSecs * ALPHA;
+				s.lastFillSecs = fillSecs;
+			}
 		}
 		if (profit != 0)
 		{
 			s.ewmaProfit = s.ewmaProfit * (1 - ALPHA) + profit * ALPHA;
 			s.totalProfit += profit;
+			l.totalProfit += profit;
 		}
 		s.lastFillMs = System.currentTimeMillis();
+		l.lastFillMs = s.lastFillMs;
 		save();
 	}
 
@@ -73,16 +143,86 @@ class ItemMemory
 	{
 		final Stats s = memory.computeIfAbsent(itemId, k -> new Stats());
 		s.ewmaPredErr = s.ewmaPredErr * 0.7 + relErr * 0.3;
+		dirty = true; // scan-rate update: one file write per scan, not per item
+	}
+
+	void recordStall(int itemId, FlipLane lane)
+	{
+		final Stats s = memory.computeIfAbsent(itemId, k -> new Stats());
+		final Lane l = laneOf(s, lane);
+		s.stalls++;
+		l.stalls++;
+		if (lane == FlipLane.QUICK)
+		{
+			// a quick pick that had to be pulled IS slow-signal; an abandoned
+			// patience order is not, so only the quick lane pays this penalty
+			s.ewmaFillSecs = s.ewmaFillSecs * (1 - ALPHA) + 900 * ALPHA;
+			s.lastStallMs = System.currentTimeMillis();
+		}
 		save();
 	}
 
-	void recordStall(int itemId)
+	/**
+	 * Recovery-based cooldown expiry — the fix for "reliable items never resurface".
+	 *
+	 * <p>A stall used to demote an item for a fixed twenty minutes AND push its
+	 * fill-time estimate toward fifteen minutes, so a demoted item was rarely
+	 * suggested, rarely got a fresh fill, and therefore never healed. Now the live
+	 * scan reports whether the item's book is cycling profitably again, and a run
+	 * of {@link #RECOVERY_SCANS} healthy scans ends the cooldown and pulls the
+	 * stall-inflated estimate back toward the last duration actually MEASURED.
+	 *
+	 * @param healthy fresh two-sided book, above the liquidity floor, positive net
+	 *                after tax, and a cycle estimate inside the quick ceiling
+	 */
+	void recordBookHealth(int itemId, boolean healthy)
 	{
-		final Stats s = memory.computeIfAbsent(itemId, k -> new Stats());
-		s.stalls++;
-		s.ewmaFillSecs = s.ewmaFillSecs * (1 - ALPHA) + 900 * ALPHA; // a stall = slow signal
-		s.lastStallMs = System.currentTimeMillis();
-		save();
+		final Stats s = memory.get(itemId);
+		if (s == null)
+		{
+			return; // never traded: nothing to recover from
+		}
+		if (!healthy)
+		{
+			if (s.healthyScans != 0)
+			{
+				s.healthyScans = 0;
+				dirty = true;
+			}
+			return;
+		}
+		if (s.lastStallMs <= s.cooldownClearedMs)
+		{
+			return; // not cooling down
+		}
+		s.healthyScans++;
+		dirty = true;
+		if (s.healthyScans < RECOVERY_SCANS)
+		{
+			return;
+		}
+		s.healthyScans = 0;
+		s.recoveries++;
+		s.cooldownClearedMs = System.currentTimeMillis();
+		// the 900s stall penalty was a guess about the future; the book just
+		// disagreed with it, so stop carrying it as if it were measurement
+		s.ewmaFillSecs = s.lastFillSecs > 0
+			? (s.ewmaFillSecs + s.lastFillSecs) / 2
+			: Math.min(s.ewmaFillSecs, 300);
+		log.debug("item {} recovered: cooldown lifted, fill estimate back to {}s",
+			itemId, (long) s.ewmaFillSecs);
+	}
+
+	/** True while a stall penalty is still in force and unrecovered. */
+	boolean isCoolingDown(int itemId)
+	{
+		final Stats s = memory.get(itemId);
+		return s != null && coolingDown(s, System.currentTimeMillis());
+	}
+
+	private static boolean coolingDown(Stats s, long now)
+	{
+		return s.lastStallMs > s.cooldownClearedMs && now - s.lastStallMs < STALL_PENALTY_MS;
 	}
 
 	/**
@@ -100,7 +240,7 @@ class ItemMemory
 		}
 		double m = 1.0;
 		final long now = System.currentTimeMillis();
-		if (now - s.lastStallMs < STALL_PENALTY_MS)
+		if (coolingDown(s, now))
 		{
 			m *= 0.25; // it stopped working — back off until it re-proves
 		}
@@ -129,9 +269,55 @@ class ItemMemory
 		return m;
 	}
 
+	/** Measured seconds for one full cycle of this item, or -1 with no evidence. */
+	long observedCycleSecs(int itemId)
+	{
+		final Stats s = memory.get(itemId);
+		if (s == null || s.fills < 2 || s.ewmaFillSecs <= 0)
+		{
+			return -1;
+		}
+		return (long) (s.ewmaFillSecs * 2);
+	}
+
 	Stats statsFor(int itemId)
 	{
 		return memory.get(itemId);
+	}
+
+	/** Whole-lane totals for the ledger the panel and overlay show. */
+	Lane laneTotals(FlipLane lane)
+	{
+		final Lane out = new Lane();
+		out.ewmaFillSecs = 0;
+		double secsWeight = 0;
+		for (Stats s : memory.values())
+		{
+			final Lane l = laneOf(s, lane);
+			out.fills += l.fills;
+			out.stalls += l.stalls;
+			out.wins += l.wins;
+			out.losses += l.losses;
+			out.totalProfit += l.totalProfit;
+			if (l.fills > 0)
+			{
+				out.ewmaFillSecs += l.ewmaFillSecs * l.fills;
+				secsWeight += l.fills;
+				out.lastFillMs = Math.max(out.lastFillMs, l.lastFillMs);
+			}
+		}
+		out.ewmaFillSecs = secsWeight > 0 ? out.ewmaFillSecs / secsWeight : 0;
+		return out;
+	}
+
+	/** One write per price scan for the scan-rate updates that set {@link #dirty}. */
+	void flush()
+	{
+		if (dirty)
+		{
+			dirty = false;
+			save();
+		}
 	}
 
 	private void load()

@@ -138,6 +138,9 @@ public class RuneAIPlugin extends Plugin
 		int lastQty;      // for delta accounting: partial fills count immediately
 		long lastSpent;
 		long lastFillMs;  // stall detection: time since anything moved
+		// the lane this offer was PLACED under. Frozen at placement: an overnight
+		// trap whose book heals by morning is still an overnight outcome.
+		FlipLane lane = FlipLane.QUICK;
 	}
 	private final OfferTrack[] offerTracks = new OfferTrack[8];
 	private Map<String, long[]> savedOfferState = new java.util.HashMap<>();
@@ -437,6 +440,7 @@ public class RuneAIPlugin extends Plugin
 				tr.buying = buying;
 				tr.startMs = nowMs;
 				tr.lastFillMs = nowMs;
+				tr.lane = flipService.laneFor(o.getItemId());
 				// restart-safe: if we tracked this exact offer before the client
 				// restarted, resume its counters — never re-book old fills
 				final long[] saved = savedOfferState.get(String.valueOf(slot));
@@ -448,6 +452,12 @@ public class RuneAIPlugin extends Plugin
 					// restore the stall clock too — a quiet offer must not look
 					// freshly-filled just because the client restarted
 					tr.lastFillMs = saved.length > 5 ? saved[5] : saved[4];
+					// and the lane, or an overnight trap reopens as a quick flip
+					// and books its 8-hour fill against the velocity stats
+					if (saved.length > 6 && saved[6] == FlipLane.LONG.ordinal())
+					{
+						tr.lane = FlipLane.LONG;
+					}
 				}
 				offerTracks[slot] = tr;
 				saveOfferState();
@@ -553,6 +563,7 @@ public class RuneAIPlugin extends Plugin
 		// unknown time — book the money, quarantine the timing
 		final boolean offlineFill = nowMs - lastLoginMs < 15_000;
 		Long fillSecs = null;
+		final FlipLane lane = tr != null ? tr.lane : flipService.laneFor(o.getItemId());
 		final boolean sug = flipService.wasSuggested(o.getItemId(), o.getPrice(), buying);
 		if (st == net.runelite.api.GrandExchangeOfferState.BOUGHT
 			|| st == net.runelite.api.GrandExchangeOfferState.SOLD)
@@ -560,11 +571,13 @@ public class RuneAIPlugin extends Plugin
 			if (tr != null && tr.itemId == o.getItemId())
 			{
 				fillSecs = (nowMs - tr.startMs) / 1000;
-				if (!offlineFill)
+				// quick-lane speed stats are session measurements; a patience order
+				// is not slow, it is patient, and it keeps its own ledger
+				if (!offlineFill && lane == FlipLane.QUICK)
 				{
 					(buying ? buyFillSecs : sellFillSecs).add(fillSecs);
 				}
-				itemMemory.recordFill(o.getItemId(), offlineFill ? -1 : fillSecs,
+				itemMemory.recordFill(o.getItemId(), lane, offlineFill ? -1 : fillSecs,
 					buying ? 0 : lastSellProfit);
 			}
 			if (sug)
@@ -583,7 +596,7 @@ public class RuneAIPlugin extends Plugin
 			{
 				sugCancels++; // our call stalled long enough that they pulled it
 			}
-			itemMemory.recordStall(o.getItemId()); // it stopped working — learn that
+			itemMemory.recordStall(o.getItemId(), lane); // it stopped working — learn that
 			offerTracks[slot] = null;
 		}
 
@@ -596,6 +609,7 @@ public class RuneAIPlugin extends Plugin
 		d.put("spent", o.getSpent());
 		d.put("suggested", sug);
 		d.put("offline", offlineFill);
+		d.put("lane", lane.name());
 		// both accounting views logged so the real coin stack can arbitrate
 		d.put("taxCalc", (long) FlipService.geTax(o.getPrice()) * o.getQuantitySold());
 		if (fillSecs != null)
@@ -650,6 +664,7 @@ public class RuneAIPlugin extends Plugin
 			final boolean membersW = client.getWorldType().contains(net.runelite.api.WorldType.MEMBERS);
 			flipService.setContext(coins, !membersW);
 			flipService.setTraderTier(traderLevel, traderMaxPrice(traderLevel));
+			flipService.setLaneConfig(config.flipLanes(), config.quickCycleSecs());
 			// log the scan itself: call -> outcome training needs what was
 			// suggested and when, including the calls the player ignored
 			if (System.currentTimeMillis() - lastFlipScanLogMs > 5 * 60_000)
@@ -730,16 +745,24 @@ public class RuneAIPlugin extends Plugin
 				}
 			}
 			geFlipOverlay.setPendingSells(pendingSells);
-			// the hail-mary board: a small rotating corner of the slot budget
+			// MODE-AWARE ADVISOR. Mid-session the patience board is a small rotating
+			// corner of the slot budget and everything else compounds in the quick
+			// lane. Heading offline inverts that: a held slot costs nothing once you
+			// log out, so every free slot is worth parking a patience order in.
 			trapBoard.maybeReload();
-			final java.util.List<TrapBoard.Pick> picks = trapPicks(coins,
-				Math.min(slots - active, config.trapSlots() - trapActive), onOffer);
-			geFlipOverlay.setTraps(picks);
-			panel.setTraps(picks);
+			final boolean offline = config.overnightMode();
+			final int trapBudget = offline
+				? slots - active
+				: Math.min(slots - active, config.trapSlots() - trapActive);
+			final java.util.List<TrapBoard.Pick> picks = trapPicks(coins, trapBudget, onOffer);
+			geFlipOverlay.setTraps(picks, offline);
+			panel.setTraps(picks, offline);
 			geFlipOverlay.setStats(active, slots, median(buyFillSecs), median(sellFillSecs),
 				sugFills, sugCancels, flipGpHr, flipRealized, lifetimeRealized,
 				(int) unitsBought, (int) unitsSold,
 				firstOfferMs > 0 ? (System.currentTimeMillis() - firstOfferMs) / 60_000 : 0);
+			panel.setLanes(itemMemory.laneTotals(FlipLane.QUICK),
+				itemMemory.laneTotals(FlipLane.LONG));
 		}
 
 		panel.setCounts(client.getNpcs().size(), client.getPlayers().size(),
@@ -837,6 +860,7 @@ public class RuneAIPlugin extends Plugin
 			}
 			out.add(new TrapBoard.Pick(t.getId(), t.getName(), buyAt, qty,
 				t.getListAt(), t.getPayoffX(), t.getCorridor()));
+			flipService.notePatienceOrder(t.getId()); // whatever happens here books LONG
 			spent += qty * buyAt;
 		}
 		return out;
@@ -913,8 +937,8 @@ public class RuneAIPlugin extends Plugin
 				final OfferTrack t = offerTracks[i];
 				if (t != null)
 				{
-					out.put(String.valueOf(i),
-						new long[]{t.itemId, t.price, t.lastQty, t.lastSpent, t.startMs, t.lastFillMs});
+					out.put(String.valueOf(i), new long[]{t.itemId, t.price, t.lastQty,
+						t.lastSpent, t.startMs, t.lastFillMs, t.lane.ordinal()});
 				}
 			}
 			Files.write(new File(DATA_DIR, "offer-state.json").toPath(),

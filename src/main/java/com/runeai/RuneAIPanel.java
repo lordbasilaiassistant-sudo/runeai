@@ -39,6 +39,7 @@ public class RuneAIPanel extends PluginPanel
 	private final JLabel flipPnlValue = new JLabel("0 gp");
 	private final JPanel flipsBox = new JPanel();
 	private final JPanel trapsBox = new JPanel();
+	private final JLabel laneLine = new JLabel("no lane results yet");
 	private final JLabel trapTitle = new JLabel("Overnight trap board");
 	private final JPanel clogGrid = new JPanel();
 	private final JLabel clogTitle = new JLabel("Trade log · 0 items");
@@ -108,6 +109,15 @@ public class RuneAIPanel extends PluginPanel
 		loading.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
 		flipsBox.add(loading);
 		container.add(flipsBox);
+		container.add(Box.createVerticalStrut(4));
+
+		// two lanes, two scoreboards — a hail-mary is never graded on quick-flip
+		// metrics, so its wins and its dead slots are counted separately
+		laneLine.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+		laneLine.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		laneLine.setAlignmentX(LEFT_ALIGNMENT);
+		laneLine.setToolTipText("Fills, win rate and realised gp, counted per lane");
+		container.add(laneLine);
 		container.add(Box.createVerticalStrut(12));
 
 		// the hail-mary board — cheap asks parked under the numbers whales type
@@ -244,8 +254,8 @@ public class RuneAIPanel extends PluginPanel
 				name.setForeground(Color.WHITE);
 				name.setAlignmentX(LEFT_ALIGNMENT);
 				final JLabel line = new JLabel(String.format(
-					"buy %,d → sell %,d   +%,d (%.1f%%)",
-					f.getBuyAt(), f.getSellAt(), f.getNet(), f.getRoi()));
+					"buy %,d → sell %,d   +%,d (%.1f%%)  ~%ds",
+					f.getBuyAt(), f.getSellAt(), f.getNet(), f.getRoi(), f.getCycleSecs()));
 				line.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
 				line.setForeground(new Color(255, 200, 0));
 				line.setAlignmentX(LEFT_ALIGNMENT);
@@ -258,10 +268,36 @@ public class RuneAIPanel extends PluginPanel
 		});
 	}
 
-	public void setTraps(java.util.List<TrapBoard.Pick> picks)
+	/** Per-lane scoreboard: each lane graded on its own results, never the other's. */
+	public void setLanes(ItemMemory.Lane quick, ItemMemory.Lane overnight)
 	{
 		SwingUtilities.invokeLater(() ->
 		{
+			if (quick.getFills() + overnight.getFills() + quick.getStalls() + overnight.getStalls() == 0)
+			{
+				return;
+			}
+			laneLine.setText(String.format("<html>QUICK %s<br>OVERNIGHT %s</html>",
+				laneSummary(quick), laneSummary(overnight)));
+		});
+	}
+
+	private static String laneSummary(ItemMemory.Lane l)
+	{
+		final int graded = l.getWins() + l.getLosses();
+		final String win = graded > 0 ? String.format("%d%% win", l.getWins() * 100 / graded) : "no sells yet";
+		return String.format("%d fills · %d pulled · %s · %+,d gp%s",
+			l.getFills(), l.getStalls(), win, l.getTotalProfit(),
+			l.getEwmaFillSecs() > 0 ? String.format(" · ~%.0fs", l.getEwmaFillSecs()) : "");
+	}
+
+	public void setTraps(java.util.List<TrapBoard.Pick> picks, boolean headingOffline)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			trapTitle.setText(headingOffline
+				? "Heading offline · fill every slot"
+				: "Overnight trap board");
 			if (picks == null || picks.isEmpty())
 			{
 				return;
