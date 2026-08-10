@@ -169,11 +169,35 @@ def main():
           f"{'EMERGENT EDGE ✓' if c_test > d_test else 'no real edge (evolution overfit) ✗'}")
     print(f"  champion genome: { {k: round(v, 4) for k, v in champion.items()} }")
 
+    arena = len(hist) * len(stamps)      # how much market this crown was won on
+    payload = dict(genome=champion, train_pnl=champ_pnl,
+                   test_pnl=c_test, default_test_pnl=d_test,
+                   emergent_edge=bool(c_test > d_test),
+                   universe=args.universe, items=len(hist), bars=len(stamps),
+                   arena=arena, lineage=lineage)
+
+    # Same guard as the backtrainer: a crown won on a toy arena, or won without
+    # an edge, must not replace one won on a real one. A 30-item smoke run
+    # silently overwrote a full champion once — that is what this prevents.
+    incumbent = None
+    if os.path.exists(CHAMP):
+        try:
+            with open(CHAMP, encoding="utf-8") as f:
+                incumbent = json.load(f)
+        except (OSError, ValueError):
+            incumbent = None
+    if incumbent and incumbent.get("emergent_edge") and (
+            not payload["emergent_edge"] or arena < (incumbent.get("arena") or 0)):
+        alt = CHAMP.replace(".json", "-rejected.json")
+        with open(alt, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        print(f"  REJECTED — incumbent champion was won on a bigger arena "
+              f"({incumbent.get('items','?')} items x {incumbent.get('bars','?')} bars"
+              f" vs {len(hist)}x{len(stamps)}) or this run showed no edge. "
+              f"Kept it; this run -> {alt}")
+        return
     with open(CHAMP, "w", encoding="utf-8") as f:
-        json.dump(dict(genome=champion, train_pnl=champ_pnl,
-                       test_pnl=c_test, default_test_pnl=d_test,
-                       emergent_edge=bool(c_test > d_test),
-                       lineage=lineage), f, indent=2)
+        json.dump(payload, f, indent=2)
     print(f"  champion -> {CHAMP} (plugin adoption gated on emergent_edge)")
 
 

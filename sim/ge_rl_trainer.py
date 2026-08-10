@@ -25,13 +25,14 @@ Loop (every 60s, default 75 minutes):
   py sim/ge_rl_trainer.py --replay ~/.runelite/runeai/market-history.jsonl
   py sim/ge_rl_trainer.py --replay <log> --stride 5   # ask the 5-minute question
 
-OPEN QUESTION, measured 2026-08-10 on 7,111 replayed live samples: at the 60s
-default the historical correction carries no usable signal — the trust gain
-drives to 0.000 and the loop reproduces the martingale. Replaying the same log
-at --stride 5 (a 5-minute horizon, matching the /5m bars the brain trained on)
-it goes the other way: gain 1.94 and x0.987 vs baseline. That is only 763
-samples over 8 scored cycles, far too thin to move the default on — record a
-longer log and re-run the stride sweep before believing it.
+OPEN QUESTION, measured 2026-08-10 on replayed live rows: at the 60s default
+the historical correction carries no usable signal — the trust gain drives to
+0.000 and the loop reproduces the martingale (x1.001 over 9,706 samples).
+Whether a longer horizon works is UNRESOLVED, and the trap is worth recording:
+--stride 5 first scored x0.987 with gain 1.94, which did NOT replicate one
+snapshot later (x1.024, gain 0.066). A stride-5 replay of a 20-cycle log gets
+only ~4 scored batches, so it is noise either way. Record hours of log, then
+sweep --stride, before believing any horizon claim.
 
 Adoption gate (never-lie rule): the plugin only ever uses this brain if the
 final report shows it BEATS the martingale baseline out of sample.
