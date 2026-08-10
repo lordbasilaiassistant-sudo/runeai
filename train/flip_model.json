@@ -1,0 +1,24 @@
+{
+  "features": [
+    "bias",
+    "isBuy",
+    "log10_price",
+    "log10_qty",
+    "hour_frac"
+  ],
+  "weights": [
+    0.5486105918177441,
+    -1.346085278660756,
+    0.8768681075878718,
+    1.1534140295302686,
+    0.1536666395777029
+  ],
+  "target": "log_seconds_to_fill",
+  "metrics": {
+    "n": 13,
+    "mae_secs": 86.02538304603146,
+    "baseline_mae_secs": 88.46153846153847,
+    "beats_baseline": true
+  },
+  "note": "provisional \u2014 retrain as fills accumulate; deploy only if beats baseline"
+}
