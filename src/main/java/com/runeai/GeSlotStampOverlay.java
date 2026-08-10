@@ -31,11 +31,13 @@ public class GeSlotStampOverlay extends Overlay
 	private final FlipService flips;
 	private final net.runelite.client.game.ItemManager itemManager;
 
-	private volatile long[] offerStarts = new long[8];
+	private volatile long[] offerStarts = new long[8];   // last fill activity
+	private volatile long[] offerPlaced = new long[8];   // wall-clock placement (incl. offline)
 
-	void setOfferStarts(long[] starts)
+	void setOfferStarts(long[] lastActivity, long[] placed)
 	{
-		offerStarts = starts;
+		offerStarts = lastActivity;
+		offerPlaced = placed;
 	}
 
 	@Inject
@@ -101,6 +103,11 @@ public class GeSlotStampOverlay extends Overlay
 					label = "CANCEL · rebuy " + fmt(low + 1);
 					c = MOVE;
 				}
+				else if (isDead(i, o))
+				{
+					label = "DEAD PRICE " + placedMin(i) + "m · reprice now";
+					c = ABORT;
+				}
 				else if (isSlow(i, o))
 				{
 					label = "STALLED " + ageMin(i) + "m · reprice?";
@@ -126,6 +133,11 @@ public class GeSlotStampOverlay extends Overlay
 				{
 					label = "CANCEL · relist " + fmt(high - 1);
 					c = MOVE;
+				}
+				else if (isDead(i, o))
+				{
+					label = "DEAD PRICE " + placedMin(i) + "m · undercut now";
+					c = ABORT;
 				}
 				else if (isSlow(i, o))
 				{
@@ -175,6 +187,19 @@ public class GeSlotStampOverlay extends Overlay
 			}
 		}
 		return held;
+	}
+
+	private boolean isDead(int slot, GrandExchangeOffer o)
+	{
+		// unfilled across 30+ wall-clock minutes (offline time counts —
+		// the market had all that time and said no)
+		return offerPlaced[slot] > 0 && o.getQuantitySold() < o.getTotalQuantity()
+			&& System.currentTimeMillis() - offerPlaced[slot] > 30 * 60_000;
+	}
+
+	private long placedMin(int slot)
+	{
+		return (System.currentTimeMillis() - offerPlaced[slot]) / 60_000;
 	}
 
 	private boolean isSlow(int slot, GrandExchangeOffer o)

@@ -673,11 +673,13 @@ public class RuneAIPlugin extends Plugin
 				: 0;
 			lastFlipGpHr = flipGpHr;
 			final long[] starts = new long[8];
+			final long[] placed = new long[8];
 			for (int i = 0; i < 8; i++)
 			{
 				starts[i] = offerTracks[i] != null ? offerTracks[i].lastFillMs : 0;
+				placed[i] = offerTracks[i] != null ? offerTracks[i].startMs : 0;
 			}
-			geSlotStampOverlay.setOfferStarts(starts);
+			geSlotStampOverlay.setOfferStarts(starts, placed);
 			geFlipOverlay.setStats(active, slots, median(buyFillSecs), median(sellFillSecs),
 				sugFills, sugCancels, flipGpHr, flipRealized,
 				(int) unitsBought, (int) unitsSold,
