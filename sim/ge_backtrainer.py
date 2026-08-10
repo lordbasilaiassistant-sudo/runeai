@@ -146,12 +146,33 @@ def main():
     print(f"  exact hits {exact:,}/{len(yte):,} | avg reward {reward:.3f}")
     print(f"  item personalities learned: {len(net.item_bias)}")
 
+    payload = dict(net=net.dump(),
+                   metrics=dict(train=len(train), test=len(yte),
+                                net_mse=net_mse, martingale_mse=mart_mse,
+                                beats_baseline=beats, exact_hits=exact,
+                                avg_reward=reward))
+
+    # A losing run must never replace a saved brain that wins: this file is the
+    # live trainer's warm start, and a small --items run can diverge and quietly
+    # destroy a good one (which is exactly how this was found).
+    incumbent = None
+    if os.path.exists(OUT):
+        try:
+            with open(OUT, encoding="utf-8") as f:
+                m = json.load(f).get("metrics", {})
+            incumbent = m if m.get("beats_baseline") else None
+        except (OSError, ValueError):
+            pass
+    if not beats and incumbent:
+        alt = OUT.replace(".json", "-rejected.json")
+        with open(alt, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+        print(f"  REJECTED — this run lost to the baseline and {os.path.basename(OUT)} "
+              f"already holds one that beats it (net MSE {incumbent['net_mse']:.5f} over "
+              f"{incumbent.get('test', '?')} test rows). Kept the incumbent; run -> {alt}")
+        return
     with open(OUT, "w", encoding="utf-8") as f:
-        json.dump(dict(net=net.dump(),
-                       metrics=dict(train=len(train), test=len(yte),
-                                    net_mse=net_mse, martingale_mse=mart_mse,
-                                    beats_baseline=beats, exact_hits=exact,
-                                    avg_reward=reward)), f)
+        json.dump(payload, f)
     print(f"  brain -> {OUT} (adoption still gated on beats_baseline)")
 
 
