@@ -698,6 +698,28 @@ public class RuneAIPlugin extends Plugin
 				placed[i] = offerTracks[i] != null ? offerTracks[i].startMs : 0;
 			}
 			geSlotStampOverlay.setOfferStarts(starts, placed);
+			// sell-first allocator: flip goods in the bag = dead capital
+			final java.util.List<String> pendingSells = new ArrayList<>();
+			final net.runelite.api.ItemContainer pinv =
+				client.getItemContainer(net.runelite.api.InventoryID.INVENTORY);
+			if (pinv != null)
+			{
+				for (net.runelite.api.Item it : pinv.getItems())
+				{
+					if (it == null || it.getId() <= 0)
+					{
+						continue;
+					}
+					final int cid = itemManager.canonicalize(it.getId());
+					final long[] basis = flipBasis.get(cid);
+					if (basis != null && basis[0] > 0 && pendingSells.size() < 3)
+					{
+						pendingSells.add(it.getQuantity() + "× "
+							+ client.getItemDefinition(cid).getName());
+					}
+				}
+			}
+			geFlipOverlay.setPendingSells(pendingSells);
 			geFlipOverlay.setStats(active, slots, median(buyFillSecs), median(sellFillSecs),
 				sugFills, sugCancels, flipGpHr, flipRealized, lifetimeRealized,
 				(int) unitsBought, (int) unitsSold,

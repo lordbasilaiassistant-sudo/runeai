@@ -52,6 +52,12 @@ public class GeFlipOverlay extends Overlay
 	}
 
 	private volatile long lifetime;
+	private volatile java.util.List<String> pendingSells = java.util.List.of();
+
+	void setPendingSells(java.util.List<String> p)
+	{
+		pendingSells = p;
+	}
 
 	void setStats(int active, int total, long medBuy, long medSell, int fills, int cancels,
 		long gpHr, long realizedPnl, long lifetimePnl, int buyCount, int sellCount, long sessMin)
@@ -166,7 +172,7 @@ public class GeFlipOverlay extends Overlay
 		final int freeSlots = Math.max(0, totalSlots - activeSlots);
 		final int rows = freeSlots == 0 ? 0 : Math.min(3, top.size());
 		final int posH = positions.isEmpty() ? 0 : 20 + positions.size() * 34;
-		final int h = 66 + posH + (rows > 0 ? rows * 36 : 0) + 58;
+		final int h = 66 + posH + (rows > 0 ? rows * 36 : 0) + 58 + (pendingSells.isEmpty() ? 0 : pendingSells.size() * 16 + 4);
 
 		g.setColor(new Color(12, 12, 18, 235));
 		g.fillRoundRect(0, 0, W, h, 10, 10);
@@ -193,6 +199,19 @@ public class GeFlipOverlay extends Overlay
 		}
 
 		int y = 74;
+
+		// SELL FIRST: unsold flip goods beat new buys for a free slot
+		if (freeSlots > 0 && !pendingSells.isEmpty())
+		{
+			g.setFont(g.getFont().deriveFont(Font.BOLD, 13f));
+			g.setColor(new Color(255, 170, 60));
+			for (String ps : pendingSells)
+			{
+				g.drawString("SELL FIRST: " + ps + " (frees capital)", 10, y);
+				y += 16;
+			}
+			y += 4;
+		}
 
 		// YOUR OFFERS first — the money you have in flight
 		if (!positions.isEmpty())

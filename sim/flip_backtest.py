@@ -90,6 +90,7 @@ def main():
         curve = [cap]
         bought_window = defaultdict(list)  # item -> [(t, units)] for 4h limits
         milestones = {}
+        slot_busy_until = [0] * args.slots  # a flip HOLDS its slot: buy bar + sell bar
         for ti in range(len(stamps) - 1):
             t, tn = stamps[ti], stamps[ti + 1]
             cands = []
@@ -117,8 +118,9 @@ def main():
                 cands.append((pred_net / (lo + 1), iid, lo, vol, rn))
             cands.sort(reverse=True)
 
+            free_slots = [i for i in range(args.slots) if slot_busy_until[i] <= t]
             spend_left = cap
-            for score, iid, lo, vol, rn in cands[:args.slots]:
+            for score, iid, lo, vol, rn in cands[:len(free_slots)]:
                 recent = sum(u for tt, u in bought_window[iid] if t - tt < 4 * 3600)
                 limit_left = max(0, mapping.get(iid, 100) - recent)
                 units = int(min(limit_left, vol * 0.10,
@@ -131,6 +133,7 @@ def main():
                 cap += proceeds - buy_cost
                 spend_left -= buy_cost
                 bought_window[iid].append((t, units))
+                slot_busy_until[free_slots.pop(0)] = tn + 3600  # busy through the sell bar
             curve.append(cap)
             for m in (100_000, 1_000_000, 10_000_000):
                 if cap >= m and m not in milestones:
