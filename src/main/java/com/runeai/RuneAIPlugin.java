@@ -122,11 +122,14 @@ public class RuneAIPlugin extends Plugin
 		int price;
 		boolean buying;
 		long startMs;
+		int lastQty;      // for delta accounting: partial fills count immediately
+		long lastSpent;
 	}
 	private final OfferTrack[] offerTracks = new OfferTrack[8];
 	private final List<Long> buyFillSecs = new ArrayList<>();
 	private final List<Long> sellFillSecs = new ArrayList<>();
 	private int sugFills, sugCancels;
+	private long unitsBought, unitsSold;
 	private long firstOfferMs;
 
 
@@ -362,6 +365,41 @@ public class RuneAIPlugin extends Plugin
 			}
 		}
 
+		// DELTA ACCOUNTING: book every new unit filled since the last event —
+		// partial fills, aborts with partials, and completions all count
+		if (tr != null && tr.itemId == o.getItemId())
+		{
+			final int dQty = o.getQuantitySold() - tr.lastQty;
+			final long dCoins = o.getSpent() - tr.lastSpent;
+			if (dQty > 0)
+			{
+				if (buying)
+				{
+					flipBasis.merge(o.getItemId(), new long[]{dQty, dCoins},
+						(a, b) -> new long[]{a[0] + b[0], a[1] + b[1]});
+					unitsBought += dQty;
+				}
+				else
+				{
+					final long[] basis = flipBasis.get(o.getItemId());
+					long cost = 0;
+					if (basis != null && basis[0] > 0)
+					{
+						final long avg = basis[1] / basis[0];
+						final long q = Math.min(dQty, basis[0]);
+						cost = avg * q;
+						basis[0] -= q;
+						basis[1] -= cost;
+					}
+					flipRealized += dCoins - cost; // sell proceeds minus cost basis
+					unitsSold += dQty;
+					panel.setFlipPnl(flipRealized);
+				}
+				tr.lastQty = o.getQuantitySold();
+				tr.lastSpent = o.getSpent();
+			}
+		}
+
 		Long fillSecs = null;
 		final boolean sug = flipService.wasSuggested(o.getItemId(), o.getPrice(), buying);
 		if (st == net.runelite.api.GrandExchangeOfferState.BOUGHT
@@ -405,25 +443,7 @@ public class RuneAIPlugin extends Plugin
 		}
 		emit("geOffer", d);
 
-		// realized flip P&L: completed buys build cost basis, completed sells realize
-		if (o.getState() == net.runelite.api.GrandExchangeOfferState.BOUGHT && o.getQuantitySold() > 0)
-		{
-			flipBasis.merge(o.getItemId(), new long[]{o.getQuantitySold(), o.getSpent()},
-				(a, b) -> new long[]{a[0] + b[0], a[1] + b[1]});
-		}
-		else if (o.getState() == net.runelite.api.GrandExchangeOfferState.SOLD && o.getQuantitySold() > 0)
-		{
-			final long[] basis = flipBasis.get(o.getItemId());
-			if (basis != null && basis[0] > 0)
-			{
-				final long qty = Math.min(o.getQuantitySold(), basis[0]);
-				final long avgCost = basis[1] / basis[0];
-				flipRealized += o.getSpent() - avgCost * qty; // spent on a sell = coins received (post-tax)
-				basis[0] -= qty;
-				basis[1] -= avgCost * qty;
-				panel.setFlipPnl(flipRealized);
-			}
-		}
+
 	}
 
 	@Subscribe
@@ -487,7 +507,7 @@ public class RuneAIPlugin extends Plugin
 				: 0;
 			geFlipOverlay.setStats(active, slots, median(buyFillSecs), median(sellFillSecs),
 				sugFills, sugCancels, flipGpHr, flipRealized,
-				buyFillSecs.size(), sellFillSecs.size(),
+				(int) unitsBought, (int) unitsSold,
 				firstOfferMs > 0 ? (System.currentTimeMillis() - firstOfferMs) / 60_000 : 0);
 		}
 

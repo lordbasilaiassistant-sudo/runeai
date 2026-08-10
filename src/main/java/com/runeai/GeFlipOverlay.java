@@ -206,7 +206,7 @@ public class GeFlipOverlay extends Overlay
 		g.drawString(String.format("SESSION %+,d gp · %,d gp/h", realized, flipGpHr), 10, y + 12);
 		g.setFont(g.getFont().deriveFont(Font.PLAIN, 12f));
 		g.setColor(Color.LIGHT_GRAY);
-		g.drawString(String.format("%d buys · %d sells · calls %d✓/%d✗ · %dm",
+		g.drawString(String.format("%d bought · %d sold · calls %d✓/%d✗ · %dm",
 			buys, sells, sugFills, sugCancels, sessionMin), 10, y + 27);
 		return new Dimension(W, h);
 	}
