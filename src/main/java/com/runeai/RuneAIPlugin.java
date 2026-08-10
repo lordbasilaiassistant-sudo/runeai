@@ -225,6 +225,7 @@ public class RuneAIPlugin extends Plugin
 			.priority(1)
 			.panel(panel)
 			.build();
+		loadFlipBasis();
 		clientToolbar.addNavigation(navButton);
 		overlayManager.add(overlay);
 		overlayManager.add(mascot);
@@ -397,6 +398,7 @@ public class RuneAIPlugin extends Plugin
 				}
 				tr.lastQty = o.getQuantitySold();
 				tr.lastSpent = o.getSpent();
+				saveFlipBasis();
 			}
 		}
 
@@ -569,6 +571,52 @@ public class RuneAIPlugin extends Plugin
 		final List<Long> c = new ArrayList<>(v);
 		Collections.sort(c);
 		return c.get(c.size() / 2);
+	}
+
+	// basis survives restarts — otherwise items bought before a relaunch
+	// book as zero-cost and the P&L flatters itself ("looks" != "is")
+	private void loadFlipBasis()
+	{
+		try
+		{
+			final File f = new File(DATA_DIR, "flip-basis.json");
+			if (f.exists())
+			{
+				final Map<String, long[]> raw = gson.fromJson(
+					new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8),
+					new com.google.gson.reflect.TypeToken<Map<String, long[]>>(){}.getType());
+				for (Map.Entry<String, long[]> e : raw.entrySet())
+				{
+					flipBasis.put(Integer.parseInt(e.getKey()), e.getValue());
+				}
+				log.info("flip basis loaded: {} items", flipBasis.size());
+			}
+		}
+		catch (Exception ex)
+		{
+			log.warn("flip basis load failed", ex);
+		}
+	}
+
+	private void saveFlipBasis()
+	{
+		try
+		{
+			final Map<String, long[]> raw = new java.util.HashMap<>();
+			for (Map.Entry<Integer, long[]> e : flipBasis.entrySet())
+			{
+				if (e.getValue()[0] > 0)
+				{
+					raw.put(String.valueOf(e.getKey()), e.getValue());
+				}
+			}
+			Files.write(new File(DATA_DIR, "flip-basis.json").toPath(),
+				gson.toJson(raw).getBytes(StandardCharsets.UTF_8));
+		}
+		catch (Exception ex)
+		{
+			log.warn("flip basis save failed", ex);
+		}
 	}
 
 	// ================= activity guidance =================
