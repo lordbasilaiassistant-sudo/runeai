@@ -54,6 +54,7 @@ class FlipService
 	private final Map<Integer, long[]> quotes = new ConcurrentHashMap<>(); // id -> {buyAt, sellAt (capped), volHr}
 	private final Map<Integer, long[]> books = new ConcurrentHashMap<>();  // id -> {low, high RAW, vol5m, highTime}
 	private final java.util.Set<Integer> trapItems = ConcurrentHashMap.newKeySet();
+	private volatile java.util.Set<Integer> whaleCorridor = java.util.Set.of();
 	private final Map<Integer, Long> predictedMid = new ConcurrentHashMap<>(); // last scan's forecast
 	private final Map<Integer, java.util.ArrayDeque<Long>> midHist = new ConcurrentHashMap<>(); // ~30min window
 	private final Map<Integer, Double> momentum = new ConcurrentHashMap<>();   // slope over the window
@@ -176,6 +177,16 @@ class FlipService
 	boolean isTrap(int itemId)
 	{
 		return trapItems.contains(itemId);
+	}
+
+	/**
+	 * Items with a whale-strike history (from the trap board). They are patience
+	 * orders, not flips — keep them out of the spread ranking even on a day their
+	 * book happens to look tradeable.
+	 */
+	void setWhaleCorridor(java.util.Set<Integer> itemIds)
+	{
+		whaleCorridor = itemIds;
 	}
 
 	/** Highest price we will ever coach for this item, whatever the tape says. */
@@ -379,6 +390,14 @@ class FlipService
 				else
 				{
 					trapItems.remove(id);
+				}
+				// Trap items are never spread grinds. Today the liquidity+freshness
+				// filters below already keep all 76 known whale-corridor items out of
+				// the ranking (measured), but that is a side effect of thresholds the
+				// ranking work will keep re-tuning — so say it outright here.
+				if (trapBook(low, high, vol) || whaleCorridor.contains(id))
+				{
+					continue;
 				}
 				if (low < 100 || vol < THIN_VOL_5M || !fresh)
 				{

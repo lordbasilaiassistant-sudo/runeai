@@ -27,6 +27,7 @@ import net.runelite.client.ui.overlay.OverlayPosition;
 public class GeFlipOverlay extends Overlay
 {
 	private static final Color GOLD = new Color(255, 200, 0);
+	private static final Color TRAP = new Color(190, 140, 255);
 	private static final int W = 304;
 
 	private final Client client;
@@ -53,10 +54,16 @@ public class GeFlipOverlay extends Overlay
 
 	private volatile long lifetime;
 	private volatile java.util.List<String> pendingSells = java.util.List.of();
+	private volatile java.util.List<TrapBoard.Pick> traps = java.util.List.of();
 
 	void setPendingSells(java.util.List<String> p)
 	{
 		pendingSells = p;
+	}
+
+	void setTraps(java.util.List<TrapBoard.Pick> t)
+	{
+		traps = t;
 	}
 
 	void setStats(int active, int total, long medBuy, long medSell, int fills, int cancels,
@@ -158,10 +165,13 @@ public class GeFlipOverlay extends Overlay
 		final int freeSlots = Math.max(0, totalSlots - activeSlots);
 		final int rows = freeSlots == 0 ? 0 : Math.min(3, top.size());
 		final int shown = Math.min(pos.size(), 6);
+		final java.util.List<TrapBoard.Pick> tp = traps;
+		final int trapRows = freeSlots == 0 ? 0 : Math.min(2, tp.size());
 
 		final int h = 48 + (pendingSells.isEmpty() ? 0 : pendingSells.size() * 16)
 			+ (shown > 0 ? 15 + shown * 18 : 0)
-			+ (rows > 0 ? 15 + rows * 18 : 0) + 40;
+			+ (rows > 0 ? 15 + rows * 18 : 0)
+			+ (trapRows > 0 ? 15 + trapRows * 28 : 0) + 40;
 
 		g.setColor(new Color(12, 12, 18, 235));
 		g.fillRoundRect(0, 0, W, h, 10, 10);
@@ -228,6 +238,31 @@ public class GeFlipOverlay extends Overlay
 				g.setColor(Color.WHITE);
 				g.drawString(fit(g, f.getName(), W - 22 - restW), 8, y);
 				y += 18;
+			}
+		}
+
+		if (trapRows > 0)
+		{
+			// the hail-mary board: cheap tickets parked under the numbers whales type
+			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 11));
+			g.setColor(TRAP);
+			g.drawString("OVERNIGHT TRAPS · park & log off", 8, y);
+			y += 15;
+			for (int i = 0; i < trapRows; i++)
+			{
+				final TrapBoard.Pick p = tp.get(i);
+				g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 13));
+				final String mult = String.format("%.0fx", p.getPayoffX());
+				final int multW = g.getFontMetrics().stringWidth(mult);
+				g.setColor(TRAP);
+				g.drawString(mult, W - 8 - multW, y);
+				g.setColor(Color.WHITE);
+				g.drawString(fit(g, p.getName(), W - 22 - multW), 8, y);
+				g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 12));
+				g.setColor(GOLD);
+				g.drawString(String.format("buy %,d @ %,d  →  list @ %,d",
+					p.getQty(), p.getBuyAt(), p.getListAt()), 8, y + 14);
+				y += 28;
 			}
 		}
 
@@ -350,7 +385,7 @@ public class GeFlipOverlay extends Overlay
 			// "margin" would be inventing a counterparty that does not exist.
 			final long[] book = flips.bookFor(itemId);
 			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 15));
-			g.setColor(new Color(190, 140, 255));
+			g.setColor(TRAP);
 			g.drawString("THIN BOOK — no real spread", 10, 50);
 			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 13));
 			g.setColor(Color.LIGHT_GRAY);

@@ -148,6 +148,16 @@ public interface RuneAIConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "trapBoard",
+		name = "Overnight trap board",
+		description = "Suggest cheap patience orders parked just under the round numbers whales type — needs sim/whale_trap_report.py to have written trap-board.json"
+	)
+	default boolean trapBoard()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "recordTicks",
 		name = "Record tick vectors",
 		description = "Write a fixed-shape state record every game tick to .runelite/runeai/ticks-*.jsonl — NN training data (restart plugin to apply)"

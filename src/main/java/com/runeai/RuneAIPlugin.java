@@ -115,6 +115,9 @@ public class RuneAIPlugin extends Plugin
 	private ItemMemory itemMemory;
 
 	@Inject
+	private TrapBoard trapBoard;
+
+	@Inject
 	private net.runelite.client.chat.ChatCommandManager chatCommandManager;
 
 	// trade collection log: items PROFITABLY flipped (real buy->sell) at least once
@@ -720,6 +723,12 @@ public class RuneAIPlugin extends Plugin
 				}
 			}
 			geFlipOverlay.setPendingSells(pendingSells);
+			// the hail-mary board: idle slots overnight are free lottery tickets
+			trapBoard.maybeReload();
+			flipService.setWhaleCorridor(trapBoard.tradedIds());
+			final java.util.List<TrapBoard.Pick> picks = trapPicks(coins, slots - active);
+			geFlipOverlay.setTraps(picks);
+			panel.setTraps(picks);
 			geFlipOverlay.setStats(active, slots, median(buyFillSecs), median(sellFillSecs),
 				sugFills, sugCancels, flipGpHr, flipRealized, lifetimeRealized,
 				(int) unitsBought, (int) unitsSold,
@@ -768,6 +777,53 @@ public class RuneAIPlugin extends Plugin
 		recordTickVector(lp);
 		updateGuidance(lp);
 		damageTakenThisTick = 0;
+	}
+
+	/**
+	 * The overnight trap portfolio. History (which items catch whales, and the
+	 * number they type) comes from the trap board; the price to actually PAY comes
+	 * from today's live book, because the log's "real" price is as old as the print.
+	 * Cheap tickets only — a lottery never gets more than a tenth of the stack.
+	 */
+	private List<TrapBoard.Pick> trapPicks(long coins, int freeSlots)
+	{
+		if (!config.trapBoard() || freeSlots <= 0)
+		{
+			return Collections.emptyList();
+		}
+		final long wallet = coins > 0 ? coins / 10 : 0;
+		final List<TrapBoard.Pick> out = new ArrayList<>();
+		long spent = 0;
+		for (TrapBoard.Ticket t : trapBoard.getTickets())
+		{
+			if (out.size() >= Math.min(freeSlots, 4))
+			{
+				break;
+			}
+			final long[] book = flipService.bookFor(t.getId());
+			if (book != null && !flipService.isTrap(t.getId()))
+			{
+				continue; // the book healed — whatever caught the whale is gone
+			}
+			final long buyAt = (book != null && book[0] > 0 ? book[0] : t.getReal()) + 1;
+			if (buyAt <= 0 || t.getListAt() < buyAt * 5)
+			{
+				continue; // the ask has to be a real multiple of the ticket price
+			}
+			long qty = Math.max(1, Math.min(flipService.limitFor(t.getId()), 10));
+			if (wallet > 0)
+			{
+				qty = Math.min(qty, (wallet - spent) / buyAt);
+				if (qty <= 0)
+				{
+					continue;
+				}
+			}
+			out.add(new TrapBoard.Pick(t.getId(), t.getName(), buyAt, qty,
+				t.getListAt(), t.getPayoffX(), t.getCorridor()));
+			spent += qty * buyAt;
+		}
+		return out;
 	}
 
 	private long syntheticCost(int itemId, int sellPrice, long qty)

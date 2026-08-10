@@ -26,6 +26,7 @@ public class RuneAIPanel extends PluginPanel
 {
 	private static final Color ACCENT = new Color(0, 180, 255);
 	private static final Color OK_GREEN = new Color(0, 200, 120);
+	private static final Color TRAP = new Color(190, 140, 255);
 
 	private final JLabel stateValue = new JLabel("STARTING");
 	private final JLabel playerValue = new JLabel("—");
@@ -37,6 +38,8 @@ public class RuneAIPanel extends PluginPanel
 	private final JLabel bondValue = new JLabel("—");
 	private final JLabel flipPnlValue = new JLabel("0 gp");
 	private final JPanel flipsBox = new JPanel();
+	private final JPanel trapsBox = new JPanel();
+	private final JLabel trapTitle = new JLabel("Overnight trap board");
 	private final JPanel clogGrid = new JPanel();
 	private final JLabel clogTitle = new JLabel("Trade log · 0 items");
 	private int clogCount;
@@ -105,6 +108,26 @@ public class RuneAIPanel extends PluginPanel
 		loading.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
 		flipsBox.add(loading);
 		container.add(flipsBox);
+		container.add(Box.createVerticalStrut(12));
+
+		// the hail-mary board — cheap asks parked under the numbers whales type
+		trapTitle.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 13));
+		trapTitle.setForeground(TRAP);
+		trapTitle.setAlignmentX(LEFT_ALIGNMENT);
+		trapTitle.setToolTipText("Run sim/whale_trap_report.py to refresh from your anomaly log");
+		container.add(trapTitle);
+		container.add(Box.createVerticalStrut(4));
+		trapsBox.setLayout(new BoxLayout(trapsBox, BoxLayout.Y_AXIS));
+		trapsBox.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		trapsBox.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(0, 3, 0, 0, TRAP),
+			BorderFactory.createEmptyBorder(8, 8, 8, 8)));
+		trapsBox.setAlignmentX(LEFT_ALIGNMENT);
+		final JLabel noTraps = new JLabel("<html>no board yet — run<br>sim/whale_trap_report.py</html>");
+		noTraps.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		noTraps.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
+		trapsBox.add(noTraps);
+		container.add(trapsBox);
 		container.add(Box.createVerticalStrut(12));
 
 		final JLabel footer = new JLabel("<html>Recording everything →<br>.runelite\\runeai\\</html>");
@@ -232,6 +255,36 @@ public class RuneAIPanel extends PluginPanel
 			}
 			flipsBox.revalidate();
 			flipsBox.repaint();
+		});
+	}
+
+	public void setTraps(java.util.List<TrapBoard.Pick> picks)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			if (picks == null || picks.isEmpty())
+			{
+				return;
+			}
+			trapsBox.removeAll();
+			for (TrapBoard.Pick p : picks)
+			{
+				final JLabel name = new JLabel(String.format("%s  %.0fx", p.getName(), p.getPayoffX()));
+				name.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 11));
+				name.setForeground(Color.WHITE);
+				name.setAlignmentX(LEFT_ALIGNMENT);
+				final JLabel line = new JLabel(String.format("buy %,d @ %,d → list @ %,d",
+					p.getQty(), p.getBuyAt(), p.getListAt()));
+				line.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+				line.setForeground(TRAP);
+				line.setAlignmentX(LEFT_ALIGNMENT);
+				line.setToolTipText(p.getCorridor() + " — park it and log off; it fills or it doesn't");
+				trapsBox.add(name);
+				trapsBox.add(line);
+				trapsBox.add(Box.createVerticalStrut(5));
+			}
+			trapsBox.revalidate();
+			trapsBox.repaint();
 		});
 	}
 
