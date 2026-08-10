@@ -75,6 +75,21 @@ Playback goes through a single-thread speech queue, so lines never overlap — o
 ### Rune, the mascot — OSRS-style pixel pet with real lip sync
 `MascotOverlay` draws Rune as a chunky pixel-art imp in the game's own visual language: flat shading bands (no gradients), a dark sprite outline, two horns, stub feet, randomised blinking, and a bob quantised to whole pixels so it moves like a retro sprite. It speaks in classic OSRS overhead text — yellow with a hard black shadow — rather than a modern bubble. The mouth is three retro visemes (closed / half / open) driven by a **real amplitude envelope**: `VoicePlayer` decodes the WAV to PCM, computes an RMS value per ~33 ms hop normalised to the clip's peak, then samples that envelope from the clip's actual frame position during playback. The mouth follows the audio, not a fake loop. The mascot overlay is movable — **hold Alt and drag** to park it anywhere on screen (standard RuneLite overlay dragging).
 
+### GE flipping copilot + the TRADER skill
+
+![RuneAI GE flipping: live suggestions, open offers with exit plans, verdict stamps, session P&L and the Trader skill](docs/img/runeai-ge-flipping.png)
+
+While the Grand Exchange is open, RuneAI becomes a flipping copilot — all in the game window:
+
+- **Live suggestions** from the wiki prices API: whole-market scan every 5 minutes, filtered to your world type (F2P/P2P), your carried coins, and your Trader level tier, ranked by achievable gp/hr with your capital. Stale-spread mirages are filtered out (both sides must have traded within 10 minutes, ROI capped at 30%).
+- **Offer-setup coach**: open any item's setup screen and see its live buy/sell prices, hourly traded volume, buy limit, suggested quantity and total projected profit (sell setups suggest your full held stack and show after-tax proceeds).
+- **Open positions with exit plans**: every live buy shows the sell target and expected profit on completion; sells show post-tax proceeds — with fill progress.
+- **Verdict stamps on the offer slots themselves**: `KEEP ✓`, `SLOW · reprice?` after 5 unfilled minutes, `CANCEL · rebuy <price>` when the market moves past you, `ABORT — margin gone`.
+- **Honest accounting**: profit = sell − buy − 2% GE tax (floored per item, sub-50gp sales untaxed), booked per partial fill the moment it happens, cost basis persisted across restarts. Session footer: realized P&L, gp/h, units traded, suggestion win/loss record.
+- **The TRADER skill**: positive flip profit awards XP on the genuine OSRS experience curve (0.1 xp per gp — level 99 represents roughly 130M lifetime profit). Each level raises the maximum item value the advisor will suggest, so your bankroll and your skill climb together. Level-ups get the full treatment: banner, voice line, mascot celebration.
+
+RuneAI never places, modifies, or cancels offers — every click is yours.
+
 ### Session P&L ledger
 RuneAI keeps a live gp ledger of your session, shown as **Session P&L** in the sidebar panel and written into the tick vectors as `pnl`.
 
