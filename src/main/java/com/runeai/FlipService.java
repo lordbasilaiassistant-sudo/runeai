@@ -31,7 +31,8 @@ class FlipService
 {
 	private static final String API = "https://prices.runescape.wiki/api/v1/osrs";
 	private static final String UA = "RuneAI RuneLite plugin (github.com/lordbasilaiassistant-sudo/runeai)";
-	private static final long REFRESH_MS = 5 * 60_000;
+	private static final long FAST_MS = 60_000;      // quotes: keep up with undercut wars
+	private static final long SLOW_MS = 5 * 60_000;  // volumes: change slowly
 
 	private final OkHttpClient http;
 	private final Gson gson;
@@ -45,7 +46,9 @@ class FlipService
 	private final Map<Integer, java.util.ArrayDeque<Long>> midHist = new ConcurrentHashMap<>(); // ~30min window
 	private final Map<Integer, Double> momentum = new ConcurrentHashMap<>();   // slope over the window
 	volatile double lastScanAvgErr = -1; // global market-surprise gauge, logged each scan
-	private final AtomicLong lastRefresh = new AtomicLong();
+	private final AtomicLong lastFast = new AtomicLong();
+	private final AtomicLong lastSlow = new AtomicLong();
+	private volatile String cachedFive;
 	private volatile long budget = -1;       // carried coins; -1 = unknown
 	private volatile boolean f2pOnly;
 	private volatile long traderMaxPrice = Long.MAX_VALUE;
@@ -203,11 +206,16 @@ class FlipService
 	void maybeRefresh()
 	{
 		final long now = System.currentTimeMillis();
-		if (now - lastRefresh.get() < REFRESH_MS)
+		if (now - lastFast.get() < FAST_MS)
 		{
 			return;
 		}
-		lastRefresh.set(now);
+		lastFast.set(now);
+		final boolean slowDue = now - lastSlow.get() >= SLOW_MS || cachedFive == null;
+		if (slowDue)
+		{
+			lastSlow.set(now);
+		}
 		if (names.isEmpty())
 		{
 			get("/mapping", body ->
@@ -221,18 +229,39 @@ class FlipService
 					limits.put(id, new int[]{o.has("limit") && !o.get("limit").isJsonNull()
 						? o.get("limit").getAsInt() : 100});
 				}
-				fetchPrices();
+				fetchPrices(true);
 			});
 		}
 		else
 		{
-			fetchPrices();
+			fetchPrices(slowDue);
 		}
 	}
 
-	private void fetchPrices()
+	private void fetchPrices(boolean refreshVolumes)
 	{
-		get("/latest", latestBody -> get("/5m", fiveBody ->
+		if (refreshVolumes)
+		{
+			get("/5m", fiveBody ->
+			{
+				cachedFive = fiveBody;
+				fetchLatestAndCompute();
+			});
+		}
+		else
+		{
+			fetchLatestAndCompute();
+		}
+	}
+
+	private void fetchLatestAndCompute()
+	{
+		final String fiveBody = cachedFive;
+		if (fiveBody == null)
+		{
+			return;
+		}
+		get("/latest", latestBody ->
 		{
 			final JsonObject latest = gson.fromJson(latestBody, JsonObject.class).getAsJsonObject("data");
 			final JsonObject five = gson.fromJson(fiveBody, JsonObject.class).getAsJsonObject("data");
@@ -314,7 +343,7 @@ class FlipService
 			lastScanAvgErr = errN > 0 ? errSum / errN : -1;
 			log.info("flip scan: {} candidates, market surprise {}",
 				flips.size(), lastScanAvgErr >= 0 ? String.format("%.2f%%", lastScanAvgErr * 100) : "n/a");
-		}));
+		});
 	}
 
 	private void get(String path, java.util.function.Consumer<String> onBody)
