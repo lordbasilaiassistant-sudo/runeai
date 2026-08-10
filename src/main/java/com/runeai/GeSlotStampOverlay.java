@@ -90,9 +90,15 @@ public class GeSlotStampOverlay extends Overlay
 			final boolean buying = o.getState() == GrandExchangeOfferState.BUYING
 				|| o.getState() == GrandExchangeOfferState.BOUGHT;
 
+			// a stalled offer at the quote isn't clearing — the reprice must step
+			// DEEPER into the spread, never re-suggest the same number
+			final long spreadStep = Math.max(1, (high - low) / 4);
 			if (buying)
 			{
 				final long margin = (q[1] - FlipService.geTax((int) q[1])) - o.getPrice();
+				// most a buy can pay and still net 1gp after tax on the sell side
+				final long maxBuy = high - FlipService.geTax((int) high) - 1;
+				final long stepUp = Math.min(o.getPrice() + spreadStep, maxBuy);
 				if (margin <= 0)
 				{
 					label = "ABORT — margin gone";
@@ -100,17 +106,21 @@ public class GeSlotStampOverlay extends Overlay
 				}
 				else if (o.getPrice() < low)
 				{
-					label = "CANCEL · rebuy " + fmt(low + 1);
+					label = "CANCEL · rebuy " + fmt(Math.max(low + 1, stepUp));
 					c = MOVE;
 				}
 				else if (isDead(i, o))
 				{
-					label = "DEAD PRICE " + placedMin(i) + "m · reprice now";
+					label = stepUp > o.getPrice()
+						? "DEAD " + placedMin(i) + "m · rebuy @ " + fmt(stepUp)
+						: "DEAD " + placedMin(i) + "m · margin thin, skip item";
 					c = ABORT;
 				}
 				else if (isSlow(i, o))
 				{
-					label = "STALLED " + ageMin(i) + "m · reprice?";
+					label = stepUp > o.getPrice()
+						? "STALLED " + ageMin(i) + "m · rebuy @ " + fmt(stepUp)
+						: "STALLED " + ageMin(i) + "m · margin thin";
 					c = MOVE;
 				}
 				else
@@ -122,6 +132,7 @@ public class GeSlotStampOverlay extends Overlay
 			else
 			{
 				final long heldExtra = heldInInventory(o.getItemId());
+				final long stepDown = Math.max(o.getPrice() - spreadStep, low);
 				if (heldExtra > 0)
 				{
 					// selling while holding more of the same item wastes the slot:
@@ -131,17 +142,21 @@ public class GeSlotStampOverlay extends Overlay
 				}
 				else if (o.getPrice() > high)
 				{
-					label = "CANCEL · relist " + fmt(high - 1);
+					label = "CANCEL · relist " + fmt(Math.min(high - 1, stepDown));
 					c = MOVE;
 				}
 				else if (isDead(i, o))
 				{
-					label = "DEAD PRICE " + placedMin(i) + "m · undercut now";
+					label = stepDown < o.getPrice()
+						? "DEAD " + placedMin(i) + "m · resell @ " + fmt(stepDown)
+						: "DEAD " + placedMin(i) + "m · at floor, hold or eat loss";
 					c = ABORT;
 				}
 				else if (isSlow(i, o))
 				{
-					label = "STALLED " + ageMin(i) + "m · undercut?";
+					label = stepDown < o.getPrice()
+						? "STALLED " + ageMin(i) + "m · resell @ " + fmt(stepDown)
+						: "STALLED " + ageMin(i) + "m · at floor";
 					c = MOVE;
 				}
 				else
