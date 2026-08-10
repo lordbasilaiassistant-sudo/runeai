@@ -1,10 +1,12 @@
 # RuneAI — an AI buddy for Old School RuneScape (RuneLite plugin)
+<img width="1917" height="1148" alt="image" src="https://github.com/user-attachments/assets/e2c32c0a-3535-471c-8b48-664366f55879" />
 
 RuneAI is a RuneLite plugin that puts an AI companion next to you while you play Old School RuneScape. It watches the live game state every tick and helps *you* play: it flashes the next thing to click when you go idle, outlines what is attacking you, shouts "eat" before you die, marks drops that are actually worth money, and keeps a running session profit/loss ledger. It does **not** click, move, or play the game for you — there is no automation of input anywhere in the code. Every decision and every click stays yours; RuneAI just makes sure you click the right thing at the right time.
 
 Repository: https://github.com/lordbasilaiassistant-sudo/runeai
 
 Last updated: 2026-08-09
+<img width="968" height="1152" alt="image" src="https://github.com/user-attachments/assets/871f1c67-4dbf-4f25-a150-be3fba0603f6" />
 
 ## What RuneAI is (buddy, not bot)
 
