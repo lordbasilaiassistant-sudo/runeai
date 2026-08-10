@@ -27,7 +27,7 @@ import net.runelite.client.ui.overlay.OverlayPosition;
 public class GeFlipOverlay extends Overlay
 {
 	private static final Color GOLD = new Color(255, 200, 0);
-	private static final int W = 252;
+	private static final int W = 304;
 
 	private final Client client;
 	private final RuneAIConfig config;
@@ -135,7 +135,7 @@ public class GeFlipOverlay extends Overlay
 				plan = "→" + fmtK((long) (o.getPrice() - FlipService.geTax(o.getPrice())) * o.getTotalQuantity());
 			}
 			pos.add(new String[]{String.format("%s %d× %s @%,d %d/%d",
-				buying ? "B" : "S", o.getTotalQuantity(), trunc(flips.nameFor(o.getItemId()), 11),
+				buying ? "B" : "S", o.getTotalQuantity(), trunc(flips.nameFor(o.getItemId()), 15),
 				o.getPrice(), o.getQuantitySold(), o.getTotalQuantity()),
 				plan, buying ? "b" : "s"});
 		}
@@ -152,9 +152,9 @@ public class GeFlipOverlay extends Overlay
 		final int rows = freeSlots == 0 ? 0 : Math.min(3, top.size());
 		final int shown = Math.min(pos.size(), 6);
 
-		final int h = 44 + (pendingSells.isEmpty() ? 0 : pendingSells.size() * 14)
-			+ (shown > 0 ? 13 + shown * 15 : 0)
-			+ (rows > 0 ? 13 + rows * 15 : 0) + 36;
+		final int h = 48 + (pendingSells.isEmpty() ? 0 : pendingSells.size() * 16)
+			+ (shown > 0 ? 15 + shown * 18 : 0)
+			+ (rows > 0 ? 15 + rows * 18 : 0) + 40;
 
 		g.setColor(new Color(12, 12, 18, 235));
 		g.fillRoundRect(0, 0, W, h, 10, 10);
@@ -162,75 +162,75 @@ public class GeFlipOverlay extends Overlay
 		g.setStroke(new BasicStroke(1.2f));
 		g.drawRoundRect(0, 0, W, h, 10, 10);
 
-		g.setFont(g.getFont().deriveFont(Font.BOLD, 14f));
+		g.setFont(g.getFont().deriveFont(Font.BOLD, 15f));
 		g.setColor(GOLD);
-		g.drawString("RuneAI flips", 8, 17);
-		g.setFont(g.getFont().deriveFont(Font.PLAIN, 11f));
+		g.drawString("RuneAI flips", 8, 18);
+		g.setFont(g.getFont().deriveFont(Font.PLAIN, 12f));
 		final boolean idle = activeSlots < totalSlots;
 		g.setColor(idle ? new Color(255, 120, 100) : new Color(120, 220, 140));
 		final String stat = String.format("slots %d/%d%s · b~%ss s~%ss", activeSlots, totalSlots,
 			idle ? "!" : "✓", medBuySecs < 0 ? "?" : medBuySecs, medSellSecs < 0 ? "?" : medSellSecs);
-		g.drawString(stat, W - 8 - g.getFontMetrics().stringWidth(stat), 17);
+		g.drawString(stat, W - 8 - g.getFontMetrics().stringWidth(stat), 18);
 
-		int y = 32;
+		int y = 36;
 		if (!pendingSells.isEmpty())
 		{
-			g.setFont(g.getFont().deriveFont(Font.BOLD, 11f));
+			g.setFont(g.getFont().deriveFont(Font.BOLD, 12f));
 			g.setColor(new Color(255, 170, 60));
 			for (String ps : pendingSells)
 			{
 				g.drawString("SELL FIRST: " + trunc(ps, 30), 8, y);
-				y += 14;
+				y += 16;
 			}
 		}
 		if (shown > 0)
 		{
-			g.setFont(g.getFont().deriveFont(Font.BOLD, 10f));
+			g.setFont(g.getFont().deriveFont(Font.BOLD, 11f));
 			g.setColor(new Color(140, 200, 255));
 			g.drawString("OFFERS", 8, y);
-			y += 13;
+			y += 15;
 			for (int i = 0; i < shown; i++)
 			{
 				final String[] ps = pos.get(i);
-				g.setFont(g.getFont().deriveFont(Font.BOLD, 11f));
+				g.setFont(g.getFont().deriveFont(Font.BOLD, 12.5f));
 				g.setColor("b".equals(ps[2]) ? new Color(140, 200, 255) : new Color(255, 170, 120));
 				g.drawString(ps[0], 8, y);
 				g.setColor(new Color(120, 220, 140));
 				g.drawString(ps[1], W - 8 - g.getFontMetrics().stringWidth(ps[1]), y);
-				y += 15;
+				y += 18;
 			}
 		}
 		if (rows > 0)
 		{
-			g.setFont(g.getFont().deriveFont(Font.BOLD, 10f));
+			g.setFont(g.getFont().deriveFont(Font.BOLD, 11f));
 			g.setColor(GOLD);
 			g.drawString("SUGGESTED", 8, y);
-			y += 13;
+			y += 15;
 			for (int i = 0; i < rows; i++)
 			{
 				final FlipService.Flip f = top.get(i);
-				g.setFont(g.getFont().deriveFont(Font.BOLD, 11f));
+				g.setFont(g.getFont().deriveFont(Font.BOLD, 12.5f));
 				g.setColor(Color.WHITE);
-				final String nm = trunc(f.getName(), 13);
+				final String nm = trunc(f.getName(), 17);
 				g.drawString(nm, 8, y);
-				g.setFont(g.getFont().deriveFont(Font.PLAIN, 11f));
+				g.setFont(g.getFont().deriveFont(Font.PLAIN, 12f));
 				g.setColor(GOLD);
 				final String rest = String.format("%,d→%,d +%d ·%s/h",
 					f.getBuyAt(), f.getSellAt(), f.getNet(), fmtK((long) (f.getUnitsHr() * 20)));
 				g.drawString(rest, W - 8 - g.getFontMetrics().stringWidth(rest), y);
-				y += 15;
+				y += 18;
 			}
 		}
 
 		g.setColor(new Color(255, 255, 255, 40));
 		g.drawLine(8, y - 4, W - 8, y - 4);
-		g.setFont(g.getFont().deriveFont(Font.BOLD, 12f));
+		g.setFont(g.getFont().deriveFont(Font.BOLD, 13f));
 		g.setColor(realized >= 0 ? new Color(120, 220, 140) : new Color(255, 100, 100));
-		g.drawString(String.format("%+,d · %s/h · life %s", realized, fmtK(flipGpHr), fmtK(lifetime)), 8, y + 10);
-		g.setFont(g.getFont().deriveFont(Font.PLAIN, 10f));
+		g.drawString(String.format("%+,d · %s/h · life %s", realized, fmtK(flipGpHr), fmtK(lifetime)), 8, y + 11);
+		g.setFont(g.getFont().deriveFont(Font.PLAIN, 11f));
 		g.setColor(Color.LIGHT_GRAY);
 		g.drawString(String.format("%db · %ds · %d✓/%d✗ · %dm · T%d %.0f%%",
-			buys, sells, sugFills, sugCancels, sessionMin, traderLvl, traderPct * 100), 8, y + 24);
+			buys, sells, sugFills, sugCancels, sessionMin, traderLvl, traderPct * 100), 8, y + 26);
 		return new Dimension(W, h);
 	}
 
