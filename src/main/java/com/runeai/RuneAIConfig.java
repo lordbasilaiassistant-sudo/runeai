@@ -198,6 +198,36 @@ public interface RuneAIConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "anomalyAlert",
+		name = "Price anomaly alert",
+		description = "Call out an item whose price has ripped away from where it was, on real volume and on both sides of the book. It states what moved and by how much — an RWT pump, an update panic and a bot ban look identical to a ranker, so the call stays yours"
+	)
+	default boolean anomalyAlert()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "anomalyPercent",
+		name = "Anomaly threshold %",
+		description = "How far the mid has to move over the ~6 minute price window before it counts as a dislocation"
+	)
+	default int anomalyPercent()
+	{
+		return 25;
+	}
+
+	@ConfigItem(
+		keyName = "anomalyHeldOnly",
+		name = "Anomalies: only what I hold",
+		description = "Alert only for items you are actually exposed to — carried, on a GE offer, or bought and not yet sold. Off means the whole market is watched"
+	)
+	default boolean anomalyHeldOnly()
+	{
+		return false;
+	}
+
+	@ConfigItem(
 		keyName = "sessionScore",
 		name = "Session scoreboard",
 		description = "Rank this session's realised flip profit against your last session and your best one, from .runelite/runeai/session-history.json"

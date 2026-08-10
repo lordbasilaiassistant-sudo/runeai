@@ -288,7 +288,7 @@ public class RuneAIPlugin extends Plugin
 			.build();
 		sessionStartMs = System.currentTimeMillis();
 		sessionHistory.begin(sessionStartMs);
-		panel.setViewsEnabled(config.sessionScore(), config.itemStats());
+		panel.setViewsEnabled(config.sessionScore(), config.itemStats(), config.anomalyAlert());
 		loadFlipBasis();
 		loadTrader();
 		loadClog();
@@ -783,7 +783,12 @@ public class RuneAIPlugin extends Plugin
 				itemMemory.laneTotals(FlipLane.LONG));
 
 			// results views: what this session and each item have ACTUALLY paid
-			panel.setViewsEnabled(config.sessionScore(), config.itemStats());
+			panel.setViewsEnabled(config.sessionScore(), config.itemStats(), config.anomalyAlert());
+			flipService.setAnomalyThreshold(config.anomalyPercent());
+			if (config.anomalyAlert())
+			{
+				checkAnomalies();
+			}
 			if (config.sessionScore())
 			{
 				panel.setSessionScore(sessionHistory.update(flipRealized, sessionPnl,
@@ -896,6 +901,154 @@ public class RuneAIPlugin extends Plugin
 			spent += qty * buyAt;
 		}
 		return out;
+	}
+
+	// ================= anomaly watch =================
+
+	/**
+	 * One alert per item per half hour, however many scans keep flagging it. A
+	 * dislocation stays flagged for as long as the price stays away from where it
+	 * was, so without this the same crash would re-announce itself every minute.
+	 */
+	private static final long ANOMALY_RECALL_MS = 30 * 60_000;
+	private final Map<Integer, Long> lastAnomalyAlertMs = new java.util.HashMap<>();
+	private final List<String[]> anomalyFeed = new ArrayList<>();
+
+	/**
+	 * Report the blue moons; decide nothing. A 30% rip is an RWT pump, an update
+	 * panic, or a ban wave clearing a bot farm's supply — those want opposite
+	 * trades, they are indistinguishable from the tape, and the difference lives
+	 * in patch notes and a Reddit thread. So the plugin states what moved, by how
+	 * much, against what, and whether the player is exposed to it. The trade is
+	 * theirs.
+	 */
+	private void checkAnomalies()
+	{
+		final List<FlipService.Anomaly> found = flipService.drainAnomalies();
+		if (found.isEmpty())
+		{
+			return;
+		}
+		final long now = System.currentTimeMillis();
+		FlipService.Anomaly pick = null;
+		String pickWhy = null;
+		int logged = 0;
+		for (FlipService.Anomaly a : found)
+		{
+			final String why = exposure(a.getItemId());
+			if (config.anomalyHeldOnly() && why == null)
+			{
+				continue;
+			}
+			// every fresh dislocation is recorded even when the alert is throttled —
+			// the log is the dataset, the alert is the interruption, and they are
+			// allowed to have different budgets
+			if (logged++ < 40)
+			{
+				final Map<String, Object> d = m();
+				d.put("item", a.getItemId());
+				d.put("name", a.getName());
+				d.put("refMid", a.getRefMid());
+				d.put("mid", a.getMid());
+				d.put("movePct", a.getMovePct());
+				d.put("scanPct", a.getScanPct());
+				d.put("vol5m", a.getVol5m());
+				d.put("spanMins", a.getSpanMins());
+				d.put("exposure", why);
+				emit("anomaly", d);
+			}
+			final Long last = lastAnomalyAlertMs.get(a.getItemId());
+			if (last != null && now - last < ANOMALY_RECALL_MS)
+			{
+				continue;
+			}
+			// the list arrives biggest-move-first, so the first survivor is the
+			// biggest; a position then outranks a larger move you have no stake in
+			if (pick == null || (why != null && pickWhy == null))
+			{
+				pick = a;
+				pickWhy = why;
+			}
+		}
+		if (pick == null)
+		{
+			return;
+		}
+		lastAnomalyAlertMs.put(pick.getItemId(), now);
+		final boolean up = pick.getMovePct() > 0;
+		final String headline = String.format("%s %+.0f%% in %dm",
+			pick.getName(), pick.getMovePct(), pick.getSpanMins());
+		final String detail = pickWhy != null
+			? String.format("%,d → %,d · %s", pick.getRefMid(), pick.getMid(), pickWhy)
+			: String.format("%,d → %,d · %,d traded/5m", pick.getRefMid(), pick.getMid(), pick.getVol5m());
+
+		anomalyFeed.add(0, new String[]{headline, detail, up ? "up" : "down",
+			pickWhy != null ? "held" : ""});
+		while (anomalyFeed.size() > 5)
+		{
+			anomalyFeed.remove(anomalyFeed.size() - 1);
+		}
+		panel.setAnomalies(new ArrayList<>(anomalyFeed));
+
+		overlay.setAlert(pickWhy != null ? headline + " — YOU HOLD IT" : headline,
+			client.getTickCount() + 12);
+		client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", String.format(
+			"<col=ff8c28>RuneAI</col> %s — mid %,d → %,d on %,d traded/5m%s. "
+				+ "Pump, update panic or ban wave? That one is your call.",
+			headline, pick.getRefMid(), pick.getMid(), pick.getVol5m(),
+			pickWhy != null ? " (" + pickWhy + ")" : ""), null);
+		if (pickWhy != null && up)
+		{
+			mascot.celebrate("Something you hold just jumped.");
+		}
+	}
+
+	/**
+	 * Why this player cares about an item, or null if they do not: carried,
+	 * sitting on a GE offer, or bought and not yet sold. An anomaly on something
+	 * you own is a decision; on anything else it is trivia.
+	 */
+	private String exposure(int itemId)
+	{
+		long carried = 0;
+		for (net.runelite.api.InventoryID cid : new net.runelite.api.InventoryID[]{
+			net.runelite.api.InventoryID.INVENTORY, net.runelite.api.InventoryID.EQUIPMENT})
+		{
+			final net.runelite.api.ItemContainer c = client.getItemContainer(cid);
+			if (c == null)
+			{
+				continue;
+			}
+			for (net.runelite.api.Item it : c.getItems())
+			{
+				if (it != null && it.getId() > 0 && itemManager.canonicalize(it.getId()) == itemId)
+				{
+					carried += it.getQuantity();
+				}
+			}
+		}
+		if (carried > 0)
+		{
+			return String.format("you hold %,d", carried);
+		}
+		final net.runelite.api.GrandExchangeOffer[] offers = client.getGrandExchangeOffers();
+		if (offers != null)
+		{
+			for (net.runelite.api.GrandExchangeOffer o : offers)
+			{
+				if (o != null && o.getItemId() == itemId
+					&& o.getState() != net.runelite.api.GrandExchangeOfferState.EMPTY)
+				{
+					return "you have it on a GE offer";
+				}
+			}
+		}
+		final long[] basis = flipBasis.get(itemId);
+		if (basis != null && basis[0] > 0)
+		{
+			return String.format("%,d bought @ %,d, unsold", basis[0], basis[1] / Math.max(1, basis[0]));
+		}
+		return null;
 	}
 
 	private long syntheticCost(int itemId, int sellPrice, long qty)

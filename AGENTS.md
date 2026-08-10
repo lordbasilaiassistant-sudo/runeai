@@ -41,7 +41,7 @@ All source lives in `src/main/java/com/runeai/`.
 | `RuneAIPanel.java` | RuneLite sidebar `PluginPanel` — game state, player, activity (+ gp/xp goal), session P&L, session scoreboard, live flips, per-lane and per-item results, trap board, bond fund, NPC/player/event counts, and the Ko-fi button. |
 | `GameStateSnapshot.java` | Static one-shot capture of the whole client state into a `Map` for a JSON dump. **Client thread only.** |
 | `EventLog.java` | Append-only JSONL writer (`{"t":iso,"tick":n,"e":type,...}`), flushes every 50 lines. |
-| `FlipService.java` | Live GE intelligence off the wiki prices API: books, tax-aware margins, trap detection, lane classification, and the velocity ranker. Suggestions only. |
+| `FlipService.java` | Live GE intelligence off the wiki prices API: books, tax-aware margins, trap detection, lane classification, the velocity ranker, and the anomaly watch. Suggestions only. |
 | `FlipLane.java` | The QUICK / LONG taxonomy — pure classifier plus the volume-based cycle-time prior. |
 | `ItemMemory.java` | Per-item bandit memory persisted to `~/.runelite/runeai/item-memory.json`, with per-lane ledgers, recovery-based cooldown expiry, and the per-item results ranking (`rank()`). |
 | `SessionHistory.java` | Per-session result rows in `~/.runelite/runeai/session-history.json` plus the "beat your last session" comparison math. All ranking is `static` and argument-fed, so it tests without a client. |
@@ -118,6 +118,15 @@ RuneLite events ──> RuneAIPlugin (@Subscribe handlers)
   (coins count as 1 gp each). `pnlPaused()` suppresses the ledger while widget groups
   12 / 465 / 192 / 300 (bank, GE, deposit box, shop) are open, because those are transfers, not profit.
   `GameState.LOGIN_SCREEN` clears `lastHolding` only — `sessionPnl` is not reset.
+- **Price anomaly alert** — detected in `FlipService.anomalous()` inside the existing 60s quote scan
+  (there is exactly one price poller and it must stay that way), triggered in
+  `RuneAIPlugin.checkAnomalies()`. Two gates: real volume, and the move must appear on the instant-SELL
+  side too — a whale overpay moves the mid without moving what anyone else pays, and that is the trap
+  board's business, not an alert's. Throttled to one alert per item per 30 min; every dislocation is
+  still written to the event log as `anomaly` whether or not it alerted. `RuneAIPlugin.exposure()`
+  answers "does the player hold this" from inventory/equipment, live GE offers, and `flip-basis.json`.
+  It never suggests a trade — an RWT pump and an update panic are indistinguishable from the tape.
+  Gated on `anomalyAlert()` / `anomalyPercent()` / `anomalyHeldOnly()`.
 - **Session scoreboard** — `SessionHistory`; one row per session in `session-history.json`, ranked by
   realised flip profit. gp/h is measured over ACTIVE time (first offer placed → now) with a one-minute
   floor, empty sessions are never written, and the live row is never part of its own comparison.

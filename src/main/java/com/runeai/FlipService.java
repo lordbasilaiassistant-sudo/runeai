@@ -43,6 +43,8 @@ class FlipService
 	static final double MAX_QUOTE_MULT = 3.0;
 	/** Liquidity floor, same 5-minute volume the ranker already requires. */
 	static final long THIN_VOL_5M = 30;
+	/** Scans kept in the rolling price window. Six at 60s each is a ~6 minute look-back. */
+	private static final int WINDOW_SCANS = 6;
 
 	private final OkHttpClient http;
 	private final Gson gson;
@@ -55,7 +57,10 @@ class FlipService
 	private final Map<Integer, long[]> books = new ConcurrentHashMap<>();  // id -> {low, high RAW, vol5m, highTime}
 	private final java.util.Set<Integer> trapItems = ConcurrentHashMap.newKeySet();
 	private final Map<Integer, Long> predictedMid = new ConcurrentHashMap<>(); // last scan's forecast
-	private final Map<Integer, java.util.ArrayDeque<Long>> midHist = new ConcurrentHashMap<>(); // ~30min window
+	/** Rolling mid window: {@link #WINDOW_SCANS} scans at {@link #FAST_MS}, so ~6 minutes. */
+	private final Map<Integer, java.util.ArrayDeque<Long>> midHist = new ConcurrentHashMap<>();
+	/** The instant-sell side over the same window — the half a whale print cannot fake. */
+	private final Map<Integer, java.util.ArrayDeque<Long>> lowHist = new ConcurrentHashMap<>();
 	private final Map<Integer, Long> prevMids = new ConcurrentHashMap<>();  // the mid one scan back, for the brain
 	private final Map<Integer, Double> momentum = new ConcurrentHashMap<>();   // slope over the window
 	volatile double lastScanAvgErr = -1; // global market-surprise gauge, logged each scan
@@ -443,6 +448,80 @@ class FlipService
 		return Math.max(0.25, Math.min(2.0, predNet / net));
 	}
 
+	// ================= anomaly watch =================
+
+	/**
+	 * A price that ripped away from where it was — the blue moons the whole
+	 * flip engine is deliberately unable to judge.
+	 *
+	 * <p>An RWT pump, an update panic and a bot farm getting banned all look
+	 * identical to a ranker: a big move on real volume. Which one it is decides
+	 * whether you sell into it or hold, and that call needs the news, the
+	 * patch notes and a human. So this is reported, never acted on.
+	 */
+	@Value
+	static class Anomaly
+	{
+		int itemId;
+		String name;
+		long refMid;       // where the mid was at the start of the window
+		long mid;          // where it is now
+		double movePct;    // signed, over the window
+		double scanPct;    // signed, over the last scan alone
+		long vol5m;
+		int spanMins;      // how far back the window the move is measured over reaches
+	}
+
+	private volatile List<Anomaly> freshAnomalies = List.of();
+	private volatile double anomalyPct = 25;
+
+	/** Move size that counts as a dislocation, from config. */
+	void setAnomalyThreshold(double percent)
+	{
+		anomalyPct = Math.max(5, percent);
+	}
+
+	/**
+	 * THE anomaly predicate. Pure, so the threshold behaviour is testable without
+	 * a client or a live book.
+	 *
+	 * <p>Two gates, and the second one is the whole point. Volume has to be real
+	 * ({@link #THIN_VOL_5M}), and the move has to show up on the instant-SELL
+	 * side too. One whale overpaying moves the instant-buy print and therefore
+	 * the mid, while the price everyone else is actually trading at has not moved
+	 * at all — that is a print, not a dislocation, and the trap board already
+	 * exists to farm it. Requiring the low side to travel at least half as far,
+	 * in the same direction, is what separates "the market repriced" from "one
+	 * person typed a big number".
+	 */
+	static boolean anomalous(long refMid, long mid, long refLow, long low, long vol5m, double thresholdPct)
+	{
+		if (refMid <= 0 || refLow <= 0 || low <= 0 || vol5m < THIN_VOL_5M)
+		{
+			return false;
+		}
+		final double midMove = (mid - refMid) * 100.0 / refMid;
+		if (Math.abs(midMove) < thresholdPct)
+		{
+			return false;
+		}
+		final double lowMove = (low - refLow) * 100.0 / refLow;
+		return Math.signum(lowMove) == Math.signum(midMove)
+			&& Math.abs(lowMove) >= thresholdPct / 2;
+	}
+
+	/**
+	 * Everything the last scan flagged, biggest move first. Drains: each scan's
+	 * findings are handed over once, so the trigger side cannot re-alert on the
+	 * same measurement just because it looked again.
+	 */
+	List<Anomaly> drainAnomalies()
+	{
+		final List<Anomaly> out = freshAnomalies;
+		freshAnomalies = List.of();
+		return out;
+	}
+
 	static int geTax(int sellPrice)
 	{
 		if (sellPrice < 50)
@@ -520,6 +599,7 @@ class FlipService
 			final JsonObject latest = gson.fromJson(latestBody, JsonObject.class).getAsJsonObject("data");
 			final JsonObject five = gson.fromJson(fiveBody, JsonObject.class).getAsJsonObject("data");
 			final List<Flip> flips = new ArrayList<>();
+			final List<Anomaly> found = new ArrayList<>();
 			double errSum = 0;
 			int errN = 0;
 			for (Map.Entry<String, JsonElement> e : latest.entrySet())
@@ -563,16 +643,38 @@ class FlipService
 					errN++;
 				}
 				predictedMid.put(id, mid);
-				// momentum over the last ~30 min of scans: the falling-knife detector
+				// momentum over the rolling window of scans: the falling-knife detector
 				final java.util.ArrayDeque<Long> h = midHist.computeIfAbsent(id, k -> new java.util.ArrayDeque<>());
+				final java.util.ArrayDeque<Long> lh = lowHist.computeIfAbsent(id, k -> new java.util.ArrayDeque<>());
 				if (!h.isEmpty())
 				{
 					prevMids.put(id, h.peekLast()); // the brain's momentum feature
 				}
+				// ANOMALY WATCH, judged before this scan joins the window: has the
+				// price ripped away from where the window started, on volume, on
+				// both sides? Measured here because the 60s quote refresh is already
+				// the only price poller — a watcher with its own timer would be a
+				// second one, disagreeing with this one on every boundary.
+				if (fresh && h.size() >= 3 && lh.size() >= 3
+					&& !trapBook(low, high, vol)
+					&& anomalous(h.peekFirst(), mid, lh.peekFirst(), low, vol, anomalyPct))
+				{
+					final long refMid = h.peekFirst();
+					final Long lastMid = h.peekLast();
+					found.add(new Anomaly(id, name, refMid, mid,
+						(mid - refMid) * 100.0 / refMid,
+						lastMid == null || lastMid <= 0 ? 0 : (mid - lastMid) * 100.0 / lastMid,
+						vol, (int) Math.max(1, h.size() * FAST_MS / 60_000)));
+				}
 				h.addLast(mid);
-				while (h.size() > 6)
+				lh.addLast((long) low);
+				while (h.size() > WINDOW_SCANS)
 				{
 					h.removeFirst();
+				}
+				while (lh.size() > WINDOW_SCANS)
+				{
+					lh.removeFirst();
 				}
 				if (h.size() >= 3)
 				{
@@ -635,10 +737,13 @@ class FlipService
 			}
 			flips.sort(Comparator.comparingLong(f -> -f.gpHr));
 			allFlips = flips;
+			found.sort(Comparator.comparingDouble(a -> -Math.abs(a.movePct)));
+			freshAnomalies = found;
 			itemMemory.flush(); // one write for the whole scan's memory updates
 			lastScanAvgErr = errN > 0 ? errSum / errN : -1;
-			log.info("flip scan: {} candidates, market surprise {} | brain {} | champion {} | fill model {}",
-				flips.size(), lastScanAvgErr >= 0 ? String.format("%.2f%%", lastScanAvgErr * 100) : "n/a",
+			log.info("flip scan: {} candidates, {} anomalies, market surprise {} | brain {} | champion {} | fill model {}",
+				flips.size(), found.size(),
+				lastScanAvgErr >= 0 ? String.format("%.2f%%", lastScanAvgErr * 100) : "n/a",
 				brain.status(), champion.status(), fillModel.status());
 		});
 	}

@@ -27,6 +27,8 @@ public class RuneAIPanel extends PluginPanel
 	private static final Color ACCENT = new Color(0, 180, 255);
 	private static final Color OK_GREEN = new Color(0, 200, 120);
 	private static final Color TRAP = new Color(190, 140, 255);
+	private static final Color ALERT = new Color(255, 140, 40);
+	private static final Color LOSS = new Color(255, 90, 90);
 
 	private final JLabel stateValue = new JLabel("STARTING");
 	private final JLabel playerValue = new JLabel("—");
@@ -48,6 +50,8 @@ public class RuneAIPanel extends PluginPanel
 	private final JPanel scoreSection = new JPanel();
 	private final JPanel itemsBox = new JPanel();
 	private final JPanel itemsSection = new JPanel();
+	private final JPanel anomalyBox = new JPanel();
+	private final JPanel anomalySection = new JPanel();
 
 	public RuneAIPanel()
 	{
@@ -103,6 +107,19 @@ public class RuneAIPanel extends PluginPanel
 			+ "gp/h is measured over ACTIVE time — first offer placed to now.</html>");
 		buildSection(scoreSection, "Session scoreboard", OK_GREEN, scoreLine);
 		container.add(scoreSection);
+		container.add(Box.createVerticalStrut(12));
+
+		// blue moons: reported, never traded on. The judgment stays with the human
+		anomalyBox.setLayout(new BoxLayout(anomalyBox, BoxLayout.Y_AXIS));
+		final JLabel noAnomalies = new JLabel("<html>market normal — nothing has<br>ripped since you logged in</html>");
+		noAnomalies.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		noAnomalies.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
+		noAnomalies.setAlignmentX(LEFT_ALIGNMENT);
+		anomalyBox.add(noAnomalies);
+		buildSection(anomalySection, "Anomaly watch", ALERT, anomalyBox);
+		anomalySection.setToolTipText("<html>Big moves on real volume, on both sides of the book.<br>"
+			+ "What it is — pump, panic, ban wave — is a human call.</html>");
+		container.add(anomalySection);
 		container.add(Box.createVerticalStrut(12));
 
 		// live GE flip suggestions (tax-aware, from wiki prices API)
@@ -281,7 +298,7 @@ public class RuneAIPanel extends PluginPanel
 		SwingUtilities.invokeLater(() ->
 		{
 			pnlValue.setText(String.format("%,d gp", pnl));
-			pnlValue.setForeground(pnl > 0 ? OK_GREEN : pnl < 0 ? new Color(255, 90, 90) : Color.WHITE);
+			pnlValue.setForeground(pnl > 0 ? OK_GREEN : pnl < 0 ? LOSS : Color.WHITE);
 		});
 	}
 
@@ -290,7 +307,7 @@ public class RuneAIPanel extends PluginPanel
 		SwingUtilities.invokeLater(() ->
 		{
 			flipPnlValue.setText(String.format("%,d gp", pnl));
-			flipPnlValue.setForeground(pnl > 0 ? OK_GREEN : pnl < 0 ? new Color(255, 90, 90) : Color.WHITE);
+			flipPnlValue.setForeground(pnl > 0 ? OK_GREEN : pnl < 0 ? LOSS : Color.WHITE);
 		});
 	}
 
@@ -347,13 +364,48 @@ public class RuneAIPanel extends PluginPanel
 			l.getEwmaFillSecs() > 0 ? String.format(" · ~%.0fs", l.getEwmaFillSecs()) : "");
 	}
 
-	/** Show or hide the two results views with their config toggles. */
-	public void setViewsEnabled(boolean sessionScore, boolean itemStats)
+	/** Show or hide the optional sections with their config toggles. */
+	public void setViewsEnabled(boolean sessionScore, boolean itemStats, boolean anomalies)
 	{
 		SwingUtilities.invokeLater(() ->
 		{
 			scoreSection.setVisible(sessionScore);
 			itemsSection.setVisible(itemStats);
+			anomalySection.setVisible(anomalies);
+		});
+	}
+
+	/**
+	 * The anomaly feed, newest first. Each entry is one already-formatted line
+	 * plus the detail the player needs to make the call themselves; the panel
+	 * decides nothing here beyond which way to colour the arrow.
+	 */
+	public void setAnomalies(java.util.List<String[]> entries)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			if (entries == null || entries.isEmpty())
+			{
+				return;
+			}
+			anomalyBox.removeAll();
+			for (String[] e : entries)
+			{
+				// {headline, detail, "up"|"down", "held"|""}
+				final JLabel head = new JLabel(e[0]);
+				head.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 11));
+				head.setForeground("up".equals(e[2]) ? OK_GREEN : LOSS);
+				head.setAlignmentX(LEFT_ALIGNMENT);
+				final JLabel detail = new JLabel(e[1]);
+				detail.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+				detail.setForeground("held".equals(e[3]) ? ALERT : ColorScheme.LIGHT_GRAY_COLOR);
+				detail.setAlignmentX(LEFT_ALIGNMENT);
+				anomalyBox.add(head);
+				anomalyBox.add(detail);
+				anomalyBox.add(Box.createVerticalStrut(5));
+			}
+			anomalyBox.revalidate();
+			anomalyBox.repaint();
 		});
 	}
 
@@ -422,7 +474,7 @@ public class RuneAIPanel extends PluginPanel
 				final JLabel line = new JLabel(sub.toString());
 				line.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
 				line.setForeground(s.getTotalProfit() > 0 ? OK_GREEN
-					: s.getTotalProfit() < 0 ? new Color(255, 90, 90) : ColorScheme.LIGHT_GRAY_COLOR);
+					: s.getTotalProfit() < 0 ? LOSS : ColorScheme.LIGHT_GRAY_COLOR);
 				line.setAlignmentX(LEFT_ALIGNMENT);
 				// the lane split only earns a line when the item actually ran in
 				// both lanes — otherwise it is a zero pretending to be information
