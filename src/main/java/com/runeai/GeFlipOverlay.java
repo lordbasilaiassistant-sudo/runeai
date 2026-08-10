@@ -85,8 +85,6 @@ public class GeFlipOverlay extends Overlay
 			return renderOfferCoach(g, setupItem);
 		}
 
-		final List<FlipService.Flip> top = flips.getTopFlips();
-
 		// open positions: every live offer with its exit plan
 		final List<String[]> positions = new ArrayList<>();
 		final net.runelite.api.GrandExchangeOffer[] offers = client.getGrandExchangeOffers();
@@ -126,10 +124,28 @@ public class GeFlipOverlay extends Overlay
 			positions.add(new String[]{head, plan, buying ? "b" : "s"});
 		}
 
+		// suggest NEW items only — never things already in your slots —
+		// and always give 3 options when any slot is free
+		final java.util.Set<Integer> activeItems = new java.util.HashSet<>();
+		for (net.runelite.api.GrandExchangeOffer o : offers)
+		{
+			if (o != null && o.getItemId() > 0)
+			{
+				activeItems.add(o.getItemId());
+			}
+		}
+		final List<FlipService.Flip> top = new ArrayList<>();
+		for (FlipService.Flip f : flips.getTopFlips())
+		{
+			if (!activeItems.contains(f.getItemId()))
+			{
+				top.add(f);
+			}
+		}
+
 		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 		final int freeSlots = Math.max(0, totalSlots - activeSlots);
-		final int rows = Math.min(Math.min(freeSlots == 0 ? 0 : Math.max(freeSlots, 1), 3),
-			top.size());
+		final int rows = freeSlots == 0 ? 0 : Math.min(3, top.size());
 		final int posH = positions.isEmpty() ? 0 : 20 + positions.size() * 34;
 		final int h = 66 + posH + (rows > 0 ? rows * 36 : 0) + 40;
 

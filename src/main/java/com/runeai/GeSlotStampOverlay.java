@@ -30,6 +30,13 @@ public class GeSlotStampOverlay extends Overlay
 	private final RuneAIConfig config;
 	private final FlipService flips;
 
+	private volatile long[] offerStarts = new long[8];
+
+	void setOfferStarts(long[] starts)
+	{
+		offerStarts = starts;
+	}
+
 	@Inject
 	GeSlotStampOverlay(Client client, RuneAIConfig config, FlipService flips)
 	{
@@ -91,6 +98,11 @@ public class GeSlotStampOverlay extends Overlay
 					label = "CANCEL · rebuy " + fmt(low + 1);
 					c = MOVE;
 				}
+				else if (isSlow(i, o))
+				{
+					label = "SLOW " + ageMin(i) + "m · reprice?";
+					c = MOVE;
+				}
 				else
 				{
 					label = "KEEP ✓";
@@ -102,6 +114,11 @@ public class GeSlotStampOverlay extends Overlay
 				if (o.getPrice() > high)
 				{
 					label = "CANCEL · relist " + fmt(high - 1);
+					c = MOVE;
+				}
+				else if (isSlow(i, o))
+				{
+					label = "SLOW " + ageMin(i) + "m · undercut?";
 					c = MOVE;
 				}
 				else
@@ -127,6 +144,18 @@ public class GeSlotStampOverlay extends Overlay
 			g.drawString(label, px + 6, py + 14);
 		}
 		return null;
+	}
+
+	private boolean isSlow(int slot, GrandExchangeOffer o)
+	{
+		// priced right but not moving: 5+ min with zero fills = velocity problem
+		return offerStarts[slot] > 0 && o.getQuantitySold() == 0
+			&& System.currentTimeMillis() - offerStarts[slot] > 5 * 60_000;
+	}
+
+	private long ageMin(int slot)
+	{
+		return (System.currentTimeMillis() - offerStarts[slot]) / 60_000;
 	}
 
 	private static String fmt(long v)
