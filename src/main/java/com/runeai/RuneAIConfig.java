@@ -3,10 +3,24 @@ package com.runeai;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
+import net.runelite.client.config.ConfigSection;
 
 @ConfigGroup("runeai")
 public interface RuneAIConfig extends Config
 {
+	/**
+	 * The only part of RuneAI that can talk to anything off the player's
+	 * machine, which is why it is boxed off in its own section, defaults to off,
+	 * and carries the third-party warning on its master switch.
+	 */
+	@ConfigSection(
+		name = "Streamer mode",
+		description = "Off by default. An LLM co-host that narrates your session while you play, so the RuneLite window can be your only OBS source. Needs your own API key and sends a short text summary of recent events to the endpoint you choose",
+		position = 100,
+		closedByDefault = true
+	)
+	String STREAMER = "streamer";
+
 	@ConfigItem(
 		keyName = "greeting",
 		name = "Login greeting",
@@ -285,5 +299,120 @@ public interface RuneAIConfig extends Config
 	default int heartbeatTicks()
 	{
 		return 10;
+	}
+
+	// ================= streamer mode (opt-in, off by default) =================
+
+	@ConfigItem(
+		keyName = "streamerMode",
+		name = "Streamer mode",
+		description = "An LLM co-host that commentates your session out loud while you play. OFF sends nothing, ever: no beats are collected and no request is built. ON sends a short text summary of recent events (item names, gp, levels, hitpoints) to the endpoint you configure below — never your account name, your position, or your recordings",
+		warning = "Streamer mode sends a short text summary of what happens in your session to a THIRD-PARTY SERVER that is not run by RuneAI or RuneLite — the LLM endpoint you configure, and optionally ElevenLabs for speech. You supply your own API keys and you pay for the usage. Your local recordings are never sent. Enable only if you want this.",
+		section = STREAMER,
+		position = 101
+	)
+	default boolean streamerMode()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "streamerBaseUrl",
+		name = "LLM base URL",
+		description = "Any OpenAI-compatible chat-completions endpoint, e.g. https://api.groq.com/openai/v1 or https://api.openai.com/v1. Blank means the co-host stays silent no matter what else is set",
+		section = STREAMER,
+		position = 102
+	)
+	default String streamerBaseUrl()
+	{
+		return "";
+	}
+
+	@ConfigItem(
+		keyName = "streamerModel",
+		name = "LLM model",
+		description = "Model id to ask for, e.g. llama-3.3-70b-versatile, gpt-4o-mini. Must exist on the endpoint above",
+		section = STREAMER,
+		position = 103
+	)
+	default String streamerModel()
+	{
+		return "llama-3.3-70b-versatile";
+	}
+
+	@ConfigItem(
+		keyName = "streamerKey",
+		name = "LLM API key",
+		description = "Your own key for that endpoint. Stored in your RuneLite profile like any other plugin setting — it is not encrypted, so treat it the way you treat the rest of that file",
+		secret = true,
+		section = STREAMER,
+		position = 104
+	)
+	default String streamerKey()
+	{
+		return "";
+	}
+
+	@ConfigItem(
+		keyName = "streamerSecs",
+		name = "Seconds between lines",
+		description = "Floor on how often the co-host may speak. Every line is a paid request, and a commentator who never shuts up is worse than one who waits for something to happen. Minimum 15",
+		section = STREAMER,
+		position = 105
+	)
+	default int streamerSecs()
+	{
+		return 45;
+	}
+
+	@ConfigItem(
+		keyName = "streamerPersona",
+		name = "Co-host persona",
+		description = "One line describing the voice you want, e.g. 'a dry veteran caster who has seen every drop table'. Blank uses the default",
+		section = STREAMER,
+		position = 106
+	)
+	default String streamerPersona()
+	{
+		return "";
+	}
+
+	@ConfigItem(
+		keyName = "streamerChat",
+		name = "Also print in chat",
+		description = "Echo each commentary line into the game chat box as well as the mascot's speech bubble. Useful when the bubble is off-camera",
+		section = STREAMER,
+		position = 107
+	)
+	default boolean streamerChat()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "streamerTtsKey",
+		name = "ElevenLabs key (optional)",
+		description = "Optional, and a SECOND third-party server. The bundled Kokoro voice lines are pre-rendered files, so there is no local synthesiser for arbitrary commentary — with no key here the co-host is text-only in the mascot's speech bubble, which is the default",
+		secret = true,
+		section = STREAMER,
+		position = 108
+	)
+	default String streamerTtsKey()
+	{
+		return "";
+	}
+
+	@ConfigItem(
+		keyName = "streamerVoiceId",
+		name = "ElevenLabs voice id",
+		description = "Voice id from your ElevenLabs Voices page. Ignored without a key above. The default is a premade voice a free account can use — LIBRARY voices are rejected on the free tier with HTTP 402, so if the co-host goes text-only, that is usually why",
+		section = STREAMER,
+		position = 109
+	)
+	default String streamerVoiceId()
+	{
+		// measured 2026-08-10 against a free-tier account: this premade voice returns
+		// pcm_24000 with HTTP 200, while a library voice id returns 402
+		return "CwhRBWXzGAHq8TQ4Fs17";
 	}
 }

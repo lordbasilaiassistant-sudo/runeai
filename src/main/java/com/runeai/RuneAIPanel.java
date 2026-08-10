@@ -39,6 +39,8 @@ public class RuneAIPanel extends PluginPanel
 	private final JLabel pnlValue = new JLabel("0 gp");
 	private final JLabel bondValue = new JLabel("—");
 	private final JLabel dangerValue = new JLabel("—");
+	private final JLabel streamerValue = new JLabel("off");
+	private final JPanel streamerRow;
 	private final JLabel flipPnlValue = new JLabel("0 gp");
 	private final JPanel flipsBox = new JPanel();
 	private final JPanel trapsBox = new JPanel();
@@ -94,6 +96,11 @@ public class RuneAIPanel extends PluginPanel
 		card.add(row("Flip P&L", flipPnlValue));
 		card.add(row("Bond fund", bondValue));
 		card.add(row("EAT warning", dangerValue));
+		// only present for the people who switched the co-host on: a row that reads
+		// "off" for everyone else is noise in the one panel that has to stay scannable
+		streamerRow = row("Co-host", streamerValue);
+		streamerRow.setVisible(false);
+		card.add(streamerRow);
 		card.add(row("NPCs loaded", npcValue));
 		card.add(row("Players loaded", playersValue));
 		card.add(row("Events logged", eventsValue));
@@ -647,6 +654,28 @@ public class RuneAIPanel extends PluginPanel
 				+ "A coarse risk prior trained on your own recorded ticks. In a context that has<br>"
 				+ "actually hurt you it warns earlier; everywhere else the threshold is the one you set.<br>"
 				+ "It never predicts an attack.</html>");
+		});
+	}
+
+	/**
+	 * Streamer-mode status, or null to hide the row entirely. This is where a
+	 * misconfigured endpoint has to become visible — a co-host that is silent
+	 * because of a bad key looks exactly like one that has nothing to say.
+	 */
+	public void setStreamer(String status)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			streamerRow.setVisible(status != null);
+			if (status == null)
+			{
+				return;
+			}
+			streamerValue.setText(status.length() > 26 ? status.substring(0, 25) + "…" : status);
+			streamerValue.setForeground(status.startsWith("live") ? OK_GREEN : ALERT);
+			streamerValue.setToolTipText("<html>" + status + "<br><br>"
+				+ "Commentary is sent to the endpoint you configured. Nothing is sent<br>"
+				+ "while streamer mode is off.</html>");
 		});
 	}
 

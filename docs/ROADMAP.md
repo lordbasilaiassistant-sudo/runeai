@@ -176,15 +176,41 @@ is actually paying and when a trip has gone unprofitable.
 
 ---
 
-### Noted for later: Streamer mode (default OFF)
+### Streamer mode [done] — opt-in, default OFF
 
-The data layer already narrates the gameplay internally — every kill, level,
-flip, loot call and close call is a structured event. Fed to an LLM brain,
-that becomes **live stream commentary** while the human plays: a co-host that
-actually knows the run ("third rune scim drop this hour — the ledger says
-that pays for the bond by Friday"). RuneLite window as the only OBS source =
-one-click Twitch setup. Voice via the existing local Kokoro pipeline ($0, offline), or ElevenLabs for premium streamer voices (user brings their own key).
-Strictly opt-in, default off, nothing leaves the machine unless enabled.
+The data layer already narrates the gameplay internally — every level, flip, anomaly, loot call and
+close call is a structured event. `StreamerService` reads that same stream, keeps the seven types
+worth a sentence, and turns each one into a beat. Every N seconds it sends the reel to an LLM and the
+reply comes back as **live commentary**: a co-host that actually knows the run. The RuneLite window is
+then the only source you need in OBS.
+
+- **Off by default and inert by construction.** With `streamerMode` off, `observe()` and `tick()`
+  return on their first line, the plugin does not call them, and the service is never started — no
+  beat is collected and no request is built. With it on but no base URL or no key, beats stay local
+  and nothing is sent. The toggle carries RuneLite's third-party-server warning.
+- **Bring your own everything.** Any OpenAI-compatible `/chat/completions` endpoint (base URL, model
+  and key are config items; the key lives in your RuneLite profile like any other setting). Async on
+  the injected OkHttp client with a hard call timeout, one request in flight at a time, and a floor of
+  15 seconds between lines.
+- **What goes on the wire:** item names, gp amounts, skill levels, hitpoints, and a one-line session
+  summary. **Not** your account name, your position, your event log, or your recordings.
+- **Output:** the mascot's speech bubble (the existing `VoicePlayer.getSpeakingText()` path), plus the
+  chat box if you want it.
+- **Voice:** optional BYO-key ElevenLabs, played through the *same* envelope code as the bundled lines
+  so Rune lip-syncs to real amplitude. With no key the co-host is text-only, which is the default.
+
+Measured end to end on 2026-08-10 against a live Groq endpoint and a free-tier ElevenLabs account:
+commentary generated from real beat shapes ("They levelled Fishing to 62 and just sold a bulk of iron
+ore."), returned as `audio/pcm`, decoded and played, mascot mouth envelope peaking at 1.0. Two things
+that measurement taught us are now baked into the defaults: a **library** ElevenLabs voice is refused
+on the free tier with HTTP 402 (the shipped default is a premade voice that works), and the co-host is
+told to say "they", because the first live run guessed the player's gender.
+
+**Not shipped, still wanted: local TTS.** The bundled Kokoro lines are pre-rendered WAV files, not a
+synthesiser, so arbitrary commentary has no local voice today — which is why v1 voice is a BYO-key
+third-party call and why text-only is the default. A real local path (a bundled ONNX Kokoro runtime,
+or a small local server the player opts into) would make streamer voice $0 and offline, and would let
+the whole feature run without any third-party server at all. That is the version worth building next.
 
 ## Phase 3 — Distribution (later)
 
@@ -247,8 +273,20 @@ uploaded.
 
 ### Does the voice need an internet connection or an API key?
 
-No. All eight voice lines are WAV files generated ahead of time with local Kokoro TTS and bundled as plugin
-resources.
+No. All eight coaching voice lines are WAV files generated ahead of time with local Kokoro TTS and bundled
+as plugin resources.
+
+The one exception is streamer mode, which is off by default: a co-host commentating arbitrary text cannot
+use pre-rendered files, so its voice is an optional service you bring your own key for. Without a key it is
+text-only in the mascot's speech bubble. Nothing about the rest of the plugin changes.
+
+### Does RuneAI send anything off my machine?
+
+Only if you turn streamer mode on, and then only what it needs to write one line of commentary: item names,
+gp amounts, skill levels, hitpoints, and a one-line session summary, sent to the endpoint you configured
+with your own API key. Your recordings, your event log, your account name and your position are never sent —
+not in streamer mode, not ever. With streamer mode off (the default) there is no network call of any kind
+beyond the public GE price API the flip suggestions already use.
 
 ### How is session profit calculated?
 

@@ -124,6 +124,9 @@ public class RuneAIPlugin extends Plugin
 	private DangerModel dangerModel;
 
 	@Inject
+	private StreamerService streamer;
+
+	@Inject
 	private net.runelite.client.chat.ChatCommandManager chatCommandManager;
 
 	// trade collection log: items PROFITABLY flipped (real buy->sell) at least once
@@ -223,6 +226,7 @@ public class RuneAIPlugin extends Plugin
 	private boolean wasUnderAttack;
 	/** HP percentage points the danger prior is currently adding to the EAT threshold. */
 	private int dangerBoost;
+	private boolean streamerStarted;
 
 	// pet follower state: Rune trails the player like a real OSRS pet
 	private WorldPoint petTile;
@@ -238,6 +242,7 @@ public class RuneAIPlugin extends Plugin
 	private long droppedValue;
 	private int lastDropTick = -1000;
 	private int lastFoodWarnTick = -1000;
+	private int lastEatEventTick = -1000;
 	private int lastDropClickItemId = -1;
 	private int lastDropClickTick = -1000;
 
@@ -294,6 +299,13 @@ public class RuneAIPlugin extends Plugin
 		sessionStartMs = System.currentTimeMillis();
 		sessionHistory.begin(sessionStartMs);
 		dangerModel.loadAsync(); // reads a file: never on the client thread
+		// the co-host is not started at all unless the player asked for it: with the
+		// toggle off nothing here ever collects a beat or builds a request
+		streamerStarted = config.streamerMode();
+		if (streamerStarted)
+		{
+			streamer.start();
+		}
 		panel.setViewsEnabled(config.sessionScore(), config.itemStats(), config.anomalyAlert());
 		loadFlipBasis();
 		loadTrader();
@@ -330,6 +342,7 @@ public class RuneAIPlugin extends Plugin
 	{
 		chatCommandManager.unregisterCommand("!profit");
 		chatCommandManager.unregisterCommand("!lvl");
+		streamer.stop();
 		sessionHistory.finish();
 		clientToolbar.removeNavigation(navButton);
 		overlayManager.remove(overlay);
@@ -374,11 +387,31 @@ public class RuneAIPlugin extends Plugin
 		{
 			eventLog.log(type, client.getTickCount(), data);
 		}
+		feedStreamer(type, data);
 	}
 
 	private Map<String, Object> m()
 	{
 		return new LinkedHashMap<>();
+	}
+
+	/**
+	 * The streamer co-host reads the SAME event stream the recorder writes —
+	 * there is one event system and this is it. The name resolver is passed
+	 * rather than looked up later because {@code emit} runs on the client thread
+	 * and nothing downstream of here does.
+	 */
+	private void feedStreamer(String type, Map<String, Object> data)
+	{
+		if (!config.streamerMode())
+		{
+			return;
+		}
+		streamer.observe(type, data, id ->
+		{
+			final net.runelite.api.ItemComposition def = client.getItemDefinition(id);
+			return def == null ? null : def.getName();
+		});
 	}
 
 	private Map<String, Object> actorInfo(Actor a)
@@ -817,6 +850,26 @@ public class RuneAIPlugin extends Plugin
 			panel.setLanes(itemMemory.laneTotals(FlipLane.QUICK),
 				itemMemory.laneTotals(FlipLane.LONG));
 
+			// the co-host follows the toggle at runtime, not only at startup
+			final boolean wantStreamer = config.streamerMode();
+			if (wantStreamer != streamerStarted)
+			{
+				streamerStarted = wantStreamer;
+				if (wantStreamer)
+				{
+					streamer.start();
+				}
+				else
+				{
+					streamer.stop();
+				}
+			}
+			if (wantStreamer)
+			{
+				streamer.setContext(streamerContext());
+			}
+			panel.setStreamer(wantStreamer ? streamer.status() : null);
+
 			panel.setDanger(config.dangerModel() ? dangerModel.status() : null,
 				config.dangerModel() && dangerModel.loaded()
 					? Math.min(95, config.lowHpPercent() + dangerBoost) : -1,
@@ -879,6 +932,22 @@ public class RuneAIPlugin extends Plugin
 			d.put("players", client.getPlayers().size());
 			d.put("interacting", lp.getInteracting() != null ? lp.getInteracting().getName() : null);
 			emit("heartbeat", d);
+		}
+
+		// the co-host: a clock check and at most one non-blocking enqueue, and only
+		// when the player has switched it on
+		if (config.streamerMode())
+		{
+			streamer.tick(System.currentTimeMillis());
+			String line;
+			while ((line = streamer.pollChatLine()) != null)
+			{
+				if (config.streamerChat())
+				{
+					client.addChatMessage(ChatMessageType.GAMEMESSAGE, "",
+						"<col=00b4ff>RuneAI</col> " + line, null);
+				}
+			}
 		}
 
 		// one sample, two consumers — skipped entirely when neither wants it
@@ -1564,6 +1633,20 @@ public class RuneAIPlugin extends Plugin
 			final int threshold = Math.min(95, config.lowHpPercent() + dangerBoost);
 			if (underAttack && hp * 100 / max <= threshold)
 			{
+				// the warning is worth one line in the event stream, but only when it
+				// STARTS: it re-evaluates every tick and a low fight would otherwise
+				// write a hundred identical rows
+				if (tick - lastEatEventTick >= 50)
+				{
+					lastEatEventTick = tick;
+					final Map<String, Object> d = m();
+					d.put("kind", "eat");
+					d.put("hp", hp);
+					d.put("max", max);
+					d.put("threshold", threshold);
+					d.put("elevated", elevated);
+					emit("guidance", d);
+				}
 				if (countInventoryAction("Eat") > 0)
 				{
 					overlay.setAlert((elevated ? "EAT NOW — HP " : "EAT — HP ") + hp + "/" + max,
@@ -1922,6 +2005,20 @@ public class RuneAIPlugin extends Plugin
 	 * retrain that earns a positive verdict sharpens the same number per tick
 	 * with no change here.
 	 */
+	/**
+	 * The one line of session context the co-host is given. Deliberately made of
+	 * numbers the player can already see in the sidebar — no account name, no
+	 * position, nothing the player has not already put on their own stream.
+	 */
+	private String streamerContext()
+	{
+		final String activity = currentActivity();
+		final long mins = (System.currentTimeMillis() - sessionStartMs) / 60_000;
+		return String.format("%s · %d min in · session %+,d gp · flips %+,d gp · trader level %d",
+			activity == null ? "no activity detected" : activity + " (" + goalMode() + " grind)",
+			mins, sessionPnl, flipRealized, traderLevel);
+	}
+
 	private void updateDanger(DangerModel.Tick sample)
 	{
 		if (!config.dangerModel())
@@ -1963,6 +2060,13 @@ public class RuneAIPlugin extends Plugin
 			overlay.setAlert(event.getSkill().getName() + " level " + event.getLevel() + "!",
 				client.getTickCount() + 8);
 			voice.play("levelup");
+			// its own event type: a level-up was only ever recoverable from the log by
+			// diffing consecutive stat lines, which is work the writer can just do
+			final Map<String, Object> lu = m();
+			lu.put("skill", event.getSkill().getName());
+			lu.put("level", event.getLevel());
+			lu.put("from", prevLevel);
+			emit("levelUp", lu);
 		}
 
 		final Map<String, Object> d = m();

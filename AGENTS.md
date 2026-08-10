@@ -51,6 +51,7 @@ All source lives in `src/main/java/com/runeai/`.
 | `Champion.java` | Evolved policy genome from `~/.runelite/runeai/ge-champion.json`. Gated on `emergent_edge`; every getter falls back to the constant it replaced. |
 | `TrapBoard.java` | Whale-trap history from `~/.runelite/runeai/trap-board.json` (written by `sim/whale_trap_report.py`). |
 | `DangerModel.java` | P(damage within 3 ticks) from `train/damage_model.json`. Per-activity baseline always; logistic residual only when `verdict.beats_baseline`. Its one consumer is the low-HP warning threshold. |
+| `StreamerService.java` | **The only code in RuneAI that talks to a machine that is not the player's.** Opt-in LLM co-host: reads the `emit()` stream, builds a compact prompt, posts it to a BYO-key OpenAI-compatible endpoint, speaks the reply through the mascot. Default OFF and inert by construction. |
 | `GeFlipOverlay.java` / `GeSlotStampOverlay.java` | Draw-only GE advice: quick-lane picks, offer coach, slot stamps, reprice steps. |
 | `src/test/java/com/runeai/RuneAIPluginTest.java` | Dev launcher — `ExternalPluginManager.loadBuiltin(RuneAIPlugin.class)` then `RuneLite.main(args)`. This is `./gradlew run`'s main class. |
 | `train/train_damage_model.py` | Numpy logistic regression over recorded tick vectors → `train/damage_model.json` (P(damage within 3 ticks)). Read back by `DangerModel`. |
@@ -178,6 +179,14 @@ RuneLite events ──> RuneAIPlugin (@Subscribe handlers)
   never timed reports `untimed` rather than the bandit's 300s starting value. Gated on `itemStats()`.
 - **Voice** — `VoicePlayer.LINES` is the source of truth for the seven keys and their text:
   `idle`, `eat`, `bank`, `loot`, `attacked`, `pot`, `bond`.
+- **Streamer mode** — `StreamerService`, gated on `streamerMode()` (**default off**). `RuneAIPlugin.emit()`
+  hands every event to `observe()`, which keeps seven types (`levelUp`, `geOffer`, `anomaly`, `guidance`,
+  `death`, `itemSpawn`, `pnl`) and discards the rest; `beatOf()` turns one event into one sentence.
+  `tick()` runs from the game tick, and does nothing but compare a clock and (at most) one non-blocking
+  `enqueue`. Output goes to `VoicePlayer.say()` → the mascot's bubble, plus optional chat drained on the
+  client thread via `pollChatLine()`. `emit("levelUp", …)` and `emit("guidance", …)` were added for this
+  and also improve the recorded stream — a level-up used to be recoverable only by diffing `stat` lines.
+  **See §5.7 before touching any of it.**
 
 ---
 
@@ -268,7 +277,21 @@ To add or change a line:
    passed to `voice.play(key)`.
 4. `./gradlew compileTestJava && ./gradlew run` and listen to it in the dev client.
 
-Voice is 100% local. There is no TTS network call at runtime and no audio is uploaded anywhere.
+Voice is 100% local **for the bundled coaching lines**. There is no TTS network call for them and no
+audio is uploaded anywhere.
+
+The one exception is opt-in streamer mode, and the reason is worth understanding before anyone
+"fixes" it: **the Kokoro clips are pre-rendered files, not a synthesiser.** There is no local TTS
+inside the plugin, so arbitrary commentary text cannot be spoken locally today. `VoicePlayer.say()`
+therefore takes bytes from an optional BYO-key service and plays them through the **same** envelope and
+clip code as the bundled lines (`playPcm`), so the mascot lip-syncs identically; with no key it shows
+the line in the bubble instead, which is the default. The service is asked for raw signed 16-bit mono
+PCM at 24 kHz precisely because that is what the bundled WAVs decode to.
+
+`VoicePlayer.isRawPcm()` decides whether bytes may be played, **from the declared content type**, not
+from the bytes. Do not reintroduce a magic-byte sniff for mp3: `0xFF 0xFF` is both an mp3 frame sync
+and the sample value -1, and real speech starts near silence — that heuristic rejected live PCM in
+testing. Magic bytes may still reject a mislabelled body; they may never approve one.
 
 ### RuneLite API hygiene
 
@@ -315,3 +338,11 @@ crowdsourcing of other players' data.
    `META-INF/services/net.runelite.client.plugins.Plugin` file.
 6. **Do not claim a feature works from the code alone.** Compiling is not testing; a launched JVM is not
    a passing test. Only an in-game confirmation counts.
+7. **Streamer mode is the only off-machine path, and it stays boxed.** It is `streamerMode`,
+   default **false**, and every entry point checks it on its first line, so with it off no beat is
+   collected and no request is built. The player supplies their own endpoint and their own keys; a
+   blank base URL or a blank key means nothing is ever sent, whatever else is configured. What may
+   leave: item names, gp amounts, skill levels, hitpoints, and a one-line session summary — a
+   highlight reel of at most `MAX_BEATS` lines. What may **never** leave: the recordings, the event
+   log, the tick vectors, the player's name, and their position. If you add a beat, ask what it puts
+   on the wire before you ask whether it is entertaining. Rules 1 and 2 above are not relaxed here.
