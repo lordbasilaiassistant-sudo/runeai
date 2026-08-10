@@ -73,7 +73,7 @@ public class GeFlipOverlay extends Overlay
 		this.config = config;
 		this.flips = flips;
 		this.itemManager = itemManager;
-		setPosition(OverlayPosition.TOP_RIGHT);
+		setPosition(OverlayPosition.ABOVE_CHATBOX_RIGHT); // default where it does not cover the GE window
 		setLayer(OverlayLayer.ABOVE_WIDGETS);
 		setMovable(true);
 	}
