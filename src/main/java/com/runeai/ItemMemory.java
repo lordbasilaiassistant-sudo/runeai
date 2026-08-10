@@ -54,7 +54,10 @@ class ItemMemory
 	{
 		final Stats s = memory.computeIfAbsent(itemId, k -> new Stats());
 		s.fills++;
-		s.ewmaFillSecs = s.ewmaFillSecs * (1 - ALPHA) + fillSecs * ALPHA;
+		if (fillSecs >= 0) // offline fills (-1): unknown duration, skip speed stats
+		{
+			s.ewmaFillSecs = s.ewmaFillSecs * (1 - ALPHA) + fillSecs * ALPHA;
+		}
 		if (profit != 0)
 		{
 			s.ewmaProfit = s.ewmaProfit * (1 - ALPHA) + profit * ALPHA;

@@ -144,6 +144,7 @@ public class RuneAIPlugin extends Plugin
 	private long unitsBought, unitsSold;
 	private long firstOfferMs;
 	private long lastFlipScanLogMs;
+	private long lastLoginMs;
 	private long lastSellProfit; // most recent realized sell profit, for item memory
 
 	// ---- TRADER: the flipping skill. profit gp -> xp on the real OSRS curve;
@@ -393,6 +394,7 @@ public class RuneAIPlugin extends Plugin
 		if (state == GameState.LOGGED_IN)
 		{
 			greeted = false;
+			lastLoginMs = System.currentTimeMillis();
 		}
 		else if (state == GameState.LOGIN_SCREEN)
 		{
@@ -527,6 +529,9 @@ public class RuneAIPlugin extends Plugin
 			}
 		}
 
+		// fills arriving in the first seconds after login happened OFFLINE at an
+		// unknown time — book the money, quarantine the timing
+		final boolean offlineFill = nowMs - lastLoginMs < 15_000;
 		Long fillSecs = null;
 		final boolean sug = flipService.wasSuggested(o.getItemId(), o.getPrice(), buying);
 		if (st == net.runelite.api.GrandExchangeOfferState.BOUGHT
@@ -535,8 +540,11 @@ public class RuneAIPlugin extends Plugin
 			if (tr != null && tr.itemId == o.getItemId())
 			{
 				fillSecs = (nowMs - tr.startMs) / 1000;
-				(buying ? buyFillSecs : sellFillSecs).add(fillSecs);
-				itemMemory.recordFill(o.getItemId(), fillSecs,
+				if (!offlineFill)
+				{
+					(buying ? buyFillSecs : sellFillSecs).add(fillSecs);
+				}
+				itemMemory.recordFill(o.getItemId(), offlineFill ? -1 : fillSecs,
 					buying ? 0 : lastSellProfit);
 			}
 			if (sug)
@@ -567,6 +575,7 @@ public class RuneAIPlugin extends Plugin
 		d.put("qtySold", o.getQuantitySold());
 		d.put("spent", o.getSpent());
 		d.put("suggested", sug);
+		d.put("offline", offlineFill);
 		// both accounting views logged so the real coin stack can arbitrate
 		d.put("taxCalc", (long) FlipService.geTax(o.getPrice()) * o.getQuantitySold());
 		if (fillSecs != null)
