@@ -137,6 +137,7 @@ public class RuneAIPlugin extends Plugin
 		long lastFillMs;  // stall detection: time since anything moved
 	}
 	private final OfferTrack[] offerTracks = new OfferTrack[8];
+	private Map<String, long[]> savedOfferState = new java.util.HashMap<>();
 	private final List<Long> buyFillSecs = new ArrayList<>();
 	private final List<Long> sellFillSecs = new ArrayList<>();
 	private int sugFills, sugCancels;
@@ -275,6 +276,7 @@ public class RuneAIPlugin extends Plugin
 		loadFlipBasis();
 		loadTrader();
 		loadClog();
+		loadOfferState();
 		chatCommandManager.registerCommandAsync("!profit", (msg, txt) ->
 		{
 			msg.getMessageNode().setValue(String.format(
@@ -431,7 +433,17 @@ public class RuneAIPlugin extends Plugin
 				tr.buying = buying;
 				tr.startMs = nowMs;
 				tr.lastFillMs = nowMs;
+				// restart-safe: if we tracked this exact offer before the client
+				// restarted, resume its counters — never re-book old fills
+				final long[] saved = savedOfferState.get(String.valueOf(slot));
+				if (saved != null && saved[0] == o.getItemId() && saved[1] == o.getPrice())
+				{
+					tr.lastQty = (int) saved[2];
+					tr.lastSpent = saved[3];
+					tr.startMs = saved[4];
+				}
 				offerTracks[slot] = tr;
+				saveOfferState();
 			}
 		}
 
@@ -511,6 +523,7 @@ public class RuneAIPlugin extends Plugin
 				tr.lastQty = o.getQuantitySold();
 				tr.lastSpent = o.getSpent();
 				saveFlipBasis();
+				saveOfferState();
 			}
 		}
 
@@ -746,6 +759,47 @@ public class RuneAIPlugin extends Plugin
 		catch (Exception ex)
 		{
 			log.warn("flip basis load failed", ex);
+		}
+	}
+
+	private void loadOfferState()
+	{
+		try
+		{
+			final File f = new File(DATA_DIR, "offer-state.json");
+			if (f.exists())
+			{
+				savedOfferState = gson.fromJson(
+					new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8),
+					new com.google.gson.reflect.TypeToken<Map<String, long[]>>(){}.getType());
+			}
+		}
+		catch (Exception ex)
+		{
+			log.warn("offer state load failed", ex);
+		}
+	}
+
+	private void saveOfferState()
+	{
+		try
+		{
+			final Map<String, long[]> out = new java.util.HashMap<>();
+			for (int i = 0; i < 8; i++)
+			{
+				final OfferTrack t = offerTracks[i];
+				if (t != null)
+				{
+					out.put(String.valueOf(i),
+						new long[]{t.itemId, t.price, t.lastQty, t.lastSpent, t.startMs});
+				}
+			}
+			Files.write(new File(DATA_DIR, "offer-state.json").toPath(),
+				gson.toJson(out).getBytes(StandardCharsets.UTF_8));
+		}
+		catch (Exception ex)
+		{
+			log.warn("offer state save failed", ex);
 		}
 	}
 
