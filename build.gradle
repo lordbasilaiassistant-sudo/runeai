@@ -34,6 +34,16 @@ tasks.withType(JavaCompile).configureEach {
 	options.release.set(11)
 }
 
+// The trained fill-time model ships with the plugin. Copied from train/ rather
+// than duplicated into src/main/resources, so the file the trainer writes and
+// the file the plugin reads can never drift apart.
+tasks.named('processResources') {
+	from('train') {
+		include 'flip_model.json'
+		into 'com/runeai'
+	}
+}
+
 tasks.register('run', JavaExec) {
 	classpath = sourceSets.test.runtimeClasspath
 	mainClass = pluginMainClass

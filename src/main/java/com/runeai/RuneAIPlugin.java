@@ -664,7 +664,8 @@ public class RuneAIPlugin extends Plugin
 			final boolean membersW = client.getWorldType().contains(net.runelite.api.WorldType.MEMBERS);
 			flipService.setContext(coins, !membersW);
 			flipService.setTraderTier(traderLevel, traderMaxPrice(traderLevel));
-			flipService.setLaneConfig(config.flipLanes(), config.quickCycleSecs());
+			flipService.setLaneConfig(config.flipLanes(), config.quickCycleSecs(),
+				(membersW ? 8 : 3) - Math.max(0, config.trapSlots()));
 			// log the scan itself: call -> outcome training needs what was
 			// suggested and when, including the calls the player ignored
 			if (System.currentTimeMillis() - lastFlipScanLogMs > 5 * 60_000)
@@ -678,12 +679,16 @@ public class RuneAIPlugin extends Plugin
 					sd.put("buy", f.getBuyAt());
 					sd.put("sell", f.getSellAt());
 					sd.put("volHr", f.getUnitsHr() * 20);
+					sd.put("cycleSecs", f.getCycleSecs());
+					sd.put("lane", f.getLane().name());
+					sd.put("velocity", flipService.velocity(f, flipService.slotCapital(coins)));
 					sugg.add(sd);
 				}
 				final Map<String, Object> d = m();
 				d.put("suggestions", sugg);
 				d.put("budget", coins);
 				d.put("marketSurprise", flipService.lastScanAvgErr);
+				d.put("fillModel", flipService.fillModelStatus());
 				emit("flipScan", d);
 			}
 			geFlipOverlay.setTrader(traderLevel,

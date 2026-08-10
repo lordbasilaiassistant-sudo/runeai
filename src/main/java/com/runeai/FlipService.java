@@ -67,6 +67,7 @@ class FlipService
 	private volatile int traderLevel = 1;
 	private volatile long quickCeilingSecs = FlipLane.DEFAULT_QUICK_CYCLE_SECS;
 	private volatile boolean lanesOn = true;
+	private volatile int quickSlots = 3;
 
 	void setTraderTier(int level, long maxPrice)
 	{
@@ -74,11 +75,12 @@ class FlipService
 		traderMaxPrice = maxPrice;
 	}
 
-	/** Lane boundary from config; the plugin pushes it in with the other context. */
-	void setLaneConfig(boolean enabled, long quickCycleSecs)
+	/** Lane boundary and slot split from config; pushed in with the other context. */
+	void setLaneConfig(boolean enabled, long quickCycleSecs, int quickLaneSlots)
 	{
 		lanesOn = enabled;
 		quickCeilingSecs = Math.max(30, quickCycleSecs);
+		quickSlots = Math.max(1, quickLaneSlots);
 	}
 
 	@Value
@@ -98,13 +100,20 @@ class FlipService
 	}
 
 	private final ItemMemory itemMemory;
+	private final FillTimeModel fillModel;
 
 	@Inject
-	FlipService(OkHttpClient http, Gson gson, ItemMemory itemMemory)
+	FlipService(OkHttpClient http, Gson gson, ItemMemory itemMemory, FillTimeModel fillModel)
 	{
 		this.http = http;
 		this.gson = gson;
 		this.itemMemory = itemMemory;
+		this.fillModel = fillModel;
+	}
+
+	String fillModelStatus()
+	{
+		return fillModel.status();
 	}
 
 	/** Player context from the plugin: carried coins + world type. */
@@ -142,10 +151,12 @@ class FlipService
 		}
 		if (b > 0)
 		{
-			// market math x learned memory: proven-fast items float up, recent
-			// stalls sink, unknowns keep a little exploration optimism
+			// VELOCITY, not margin: gp per cycle-second x learned memory. Proven-fast
+			// items float up, recent stalls sink, unknowns keep a little exploration
+			// optimism. A 2gp margin cycling every 40s beats a 50gp margin that sits
+			// for eight minutes, and ranking by margin is what made sells stall.
 			out.sort(Comparator.comparingDouble(f ->
-				-(double) f.getNet() * Math.min(f.getUnitsHr(), (double) b / f.getBuyAt())
+				-velocity(f, slotCapital(b))
 					* itemMemory.scoreMultiplier(f.getItemId())
 					* momentumFactor(f.getItemId())));
 		}
@@ -197,15 +208,65 @@ class FlipService
 	}
 
 	/**
+	 * gp per cycle-second for ONE slot: the quick lane's whole thesis in one
+	 * number. Units in a cycle are whichever binds first — what the book and the
+	 * buy limit will pass in that time, or what the slot's share of the coins can
+	 * carry. Dividing by cycle time is what makes compounding visible: when the
+	 * book is the constraint this reduces to gp/hr and cycle time drops out, and
+	 * when capital is the constraint (a big bankroll on cheap items) the fastest
+	 * turnaround wins, which is the regime this player is actually in.
+	 */
+	double velocity(Flip f, long slotCapital)
+	{
+		final long cyc = Math.max(1, f.getCycleSecs());
+		final double throughput = f.getUnitsHr() * cyc / 3600.0;
+		final double afford = slotCapital > 0
+			? (double) slotCapital / Math.max(1, f.getBuyAt())
+			: throughput;
+		return f.getNet() * Math.max(0.001, Math.min(throughput, afford)) / cyc;
+	}
+
+	/** One quick slot's share of the coins — the lane runs them in parallel. */
+	long slotCapital(long coins)
+	{
+		return coins <= 0 ? 0 : (long) (coins * capitalShare());
+	}
+
+	/** Even split across the quick slots. #4 replaces this with the evolved genome. */
+	double capitalShare()
+	{
+		return 1.0 / Math.max(1, quickSlots);
+	}
+
+	/**
 	 * Seconds for a full buy-then-sell cycle of this item.
 	 *
 	 * <p>This player's own measured fills win where they exist — a confidence blend
-	 * over the volume prior, so two fills nudge and ten fills decide. With no
-	 * history at all it is the prior alone, which is a shape, not a measurement.
+	 * over the prior, so two fills nudge and ten fills decide. With no history at
+	 * all it is the prior alone. The prior is the fitted fill-time model when that
+	 * model's own out-of-sample verdict says {@code adopt}, and otherwise the
+	 * volume shape, which is a shape and not a measurement.
 	 */
 	long estCycleSecs(int itemId, long vol5m)
 	{
-		final long prior = FlipLane.priorCycleSecs(vol5m);
+		long prior = FlipLane.priorCycleSecs(vol5m);
+		if (fillModel.adopted())
+		{
+			// qty is the order the ranker would actually place at the prior cycle
+			// length — computed first so the model is never asked to predict from
+			// a quantity that depends on its own answer
+			final int[] lim = limits.get(itemId);
+			final long[] bk = books.get(itemId);
+			final long price = bk != null ? bk[0] + 1 : 0;
+			final double units = Math.min(lim != null ? lim[0] : 100,
+				vol5m * 12 * 0.05 * prior / 3600.0);
+			final long modelled = fillModel.cycleSecs(price, (long) Math.max(1, units),
+				java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC).getHour());
+			if (modelled > 0)
+			{
+				prior = modelled;
+			}
+		}
 		final long observed = itemMemory.observedCycleSecs(itemId);
 		if (observed <= 0)
 		{
@@ -393,6 +454,7 @@ class FlipService
 		}
 		get("/latest", latestBody ->
 		{
+			fillModel.ensureLoaded(); // off the client thread, and needed below
 			final JsonObject latest = gson.fromJson(latestBody, JsonObject.class).getAsJsonObject("data");
 			final JsonObject five = gson.fromJson(fiveBody, JsonObject.class).getAsJsonObject("data");
 			final List<Flip> flips = new ArrayList<>();

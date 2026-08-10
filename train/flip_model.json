@@ -7,18 +7,25 @@
     "hour_frac"
   ],
   "weights": [
-    0.5486105918177441,
-    -1.346085278660756,
-    0.8768681075878718,
-    1.1534140295302686,
-    0.1536666395777029
+    3.2073289726653877,
+    0.6652234080067007,
+    -0.5602072709531966,
+    0.7171783900185841,
+    1.8835125599932616
   ],
   "target": "log_seconds_to_fill",
+  "verdict": "fallback",
+  "verdict_reason": "needs n>=40 (have 47) and log-error gain >=15% with no loss in seconds (have +6.7% log, -57.8% sec)",
   "metrics": {
-    "n": 13,
-    "mae_secs": 86.02538304603146,
-    "baseline_mae_secs": 88.46153846153847,
-    "beats_baseline": true
+    "n": 47,
+    "folds": 9,
+    "cv_log_mae": 1.8620053652764486,
+    "baseline_log_mae": 1.994938686726282,
+    "log_gain": 0.06663529176827912,
+    "cv_median_abs_secs": 41.81021713309681,
+    "baseline_median_abs_secs": 26.495454169735044,
+    "secs_gain": -0.5780147366130209,
+    "median_fill_secs": 27
   },
-  "note": "provisional \u2014 retrain as fills accumulate; deploy only if beats baseline"
+  "note": "All metrics are K-fold out-of-sample with the baseline median refit inside each training fold. The plugin ranks by cycle velocity either way; this model only sharpens the cycle-time estimate when verdict == 'adopt'."
 }
