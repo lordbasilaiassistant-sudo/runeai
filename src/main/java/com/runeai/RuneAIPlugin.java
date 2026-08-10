@@ -114,6 +114,13 @@ public class RuneAIPlugin extends Plugin
 	@Inject
 	private ItemMemory itemMemory;
 
+	@Inject
+	private net.runelite.client.chat.ChatCommandManager chatCommandManager;
+
+	// trade collection log: items PROFITABLY flipped (real buy->sell) at least once
+	private final Set<Integer> tradeClog = new java.util.HashSet<>();
+	private long lastFlipGpHr;
+
 	// realized GE flip tracking (fills are post-tax in the coins we receive)
 	private final Map<Integer, long[]> flipBasis = new java.util.HashMap<>(); // id -> {qty, totalCost}
 	private long flipRealized;
@@ -267,6 +274,24 @@ public class RuneAIPlugin extends Plugin
 			.build();
 		loadFlipBasis();
 		loadTrader();
+		loadClog();
+		chatCommandManager.registerCommandAsync("!profit", (msg, txt) ->
+		{
+			msg.getMessageNode().setValue(String.format(
+				"<col=00b4ff>RuneAI</col> flips: %,d gp this session (%,d gp/h)",
+				flipRealized, lastFlipGpHr));
+			clientThread.invoke(() -> client.refreshChat());
+		});
+		chatCommandManager.registerCommandAsync("!lvl", (msg, txt) ->
+		{
+			if (txt != null && txt.toLowerCase().contains("trader"))
+			{
+				msg.getMessageNode().setValue(String.format(
+					"<col=00b4ff>Trader level %d</col> — %,.0f xp · %d items in trade log",
+					traderLevel, traderXp, tradeClog.size()));
+				clientThread.invoke(() -> client.refreshChat());
+			}
+		});
 		clientToolbar.addNavigation(navButton);
 		overlayManager.add(overlay);
 		overlayManager.add(mascot);
@@ -278,6 +303,8 @@ public class RuneAIPlugin extends Plugin
 	@Override
 	protected void shutDown() throws Exception
 	{
+		chatCommandManager.unregisterCommand("!profit");
+		chatCommandManager.unregisterCommand("!lvl");
 		clientToolbar.removeNavigation(navButton);
 		overlayManager.remove(overlay);
 		overlayManager.remove(mascot);
@@ -426,6 +453,7 @@ public class RuneAIPlugin extends Plugin
 				else
 				{
 					final long[] basis = flipBasis.get(o.getItemId());
+					final boolean realBasis = basis != null && basis[0] > 0;
 					long cost = 0;
 					if (basis != null && basis[0] > 0)
 					{
@@ -454,6 +482,16 @@ public class RuneAIPlugin extends Plugin
 					flipRealized += profit;
 					unitsSold += dQty;
 					panel.setFlipPnl(flipRealized);
+
+					// TRADE COLLECTION LOG: first profitable real buy->sell of an item
+					if (profit > 0 && realBasis && tradeClog.add(o.getItemId()))
+					{
+						saveClog();
+						final String iname = client.getItemDefinition(o.getItemId()).getName();
+						overlay.setAlert("NEW TRADE COLLECTED: " + iname + "!", client.getTickCount() + 10);
+						mascot.celebrate("New trade logged: " + iname + "!");
+						panel.addCollected(iname, itemManager.getImage(o.getItemId()));
+					}
 
 					// TRADER xp: positive profit only, real OSRS curve
 					if (profit > 0)
@@ -607,9 +645,11 @@ public class RuneAIPlugin extends Plugin
 					active++;
 				}
 			}
-			final long flipGpHr = firstOfferMs > 0
+			long flipGpHr; // kept for chat command
+			flipGpHr = firstOfferMs > 0
 				? flipRealized * 3600_000L / Math.max(60_000, System.currentTimeMillis() - firstOfferMs)
 				: 0;
+			lastFlipGpHr = flipGpHr;
 			final long[] starts = new long[8];
 			for (int i = 0; i < 8; i++)
 			{
@@ -624,6 +664,7 @@ public class RuneAIPlugin extends Plugin
 
 		panel.setCounts(client.getNpcs().size(), client.getPlayers().size(),
 			eventLog != null ? eventLog.getLines() : 0);
+		populateClogPanel();
 
 		final String name = lp.getName();
 		if (name != null)
@@ -705,6 +746,56 @@ public class RuneAIPlugin extends Plugin
 		catch (Exception ex)
 		{
 			log.warn("flip basis load failed", ex);
+		}
+	}
+
+	private void loadClog()
+	{
+		try
+		{
+			final File f = new File(DATA_DIR, "trade-clog.json");
+			if (f.exists())
+			{
+				final java.util.List<Double> raw = gson.fromJson(
+					new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8),
+					new com.google.gson.reflect.TypeToken<java.util.List<Double>>(){}.getType());
+				for (Double d : raw)
+				{
+					tradeClog.add(d.intValue());
+				}
+			}
+		}
+		catch (Exception ex)
+		{
+			log.warn("clog load failed", ex);
+		}
+	}
+
+	private void saveClog()
+	{
+		try
+		{
+			Files.write(new File(DATA_DIR, "trade-clog.json").toPath(),
+				gson.toJson(tradeClog).getBytes(StandardCharsets.UTF_8));
+		}
+		catch (Exception ex)
+		{
+			log.warn("clog save failed", ex);
+		}
+	}
+
+	private boolean clogPopulated;
+
+	private void populateClogPanel()
+	{
+		if (clogPopulated)
+		{
+			return;
+		}
+		clogPopulated = true;
+		for (int id : tradeClog)
+		{
+			panel.addCollected(client.getItemDefinition(id).getName(), itemManager.getImage(id));
 		}
 	}
 

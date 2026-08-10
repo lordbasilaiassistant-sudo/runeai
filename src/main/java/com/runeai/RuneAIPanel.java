@@ -37,6 +37,9 @@ public class RuneAIPanel extends PluginPanel
 	private final JLabel bondValue = new JLabel("—");
 	private final JLabel flipPnlValue = new JLabel("0 gp");
 	private final JPanel flipsBox = new JPanel();
+	private final JPanel clogGrid = new JPanel();
+	private final JLabel clogTitle = new JLabel("Trade log · 0 items");
+	private int clogCount;
 
 	public RuneAIPanel()
 	{
@@ -138,6 +141,17 @@ public class RuneAIPanel extends PluginPanel
 			}
 		});
 		container.add(kofi);
+		container.add(Box.createVerticalStrut(14));
+
+		clogTitle.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 13));
+		clogTitle.setForeground(ACCENT);
+		clogTitle.setAlignmentX(LEFT_ALIGNMENT);
+		container.add(clogTitle);
+		container.add(Box.createVerticalStrut(4));
+		clogGrid.setLayout(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 3, 3));
+		clogGrid.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		clogGrid.setAlignmentX(LEFT_ALIGNMENT);
+		container.add(clogGrid);
 
 		add(container, BorderLayout.NORTH);
 	}
@@ -218,6 +232,19 @@ public class RuneAIPanel extends PluginPanel
 			}
 			flipsBox.revalidate();
 			flipsBox.repaint();
+		});
+	}
+
+	public void addCollected(String name, net.runelite.client.util.AsyncBufferedImage img)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			final JLabel icon = new JLabel();
+			icon.setToolTipText(name);
+			img.addTo(icon);
+			clogGrid.add(icon);
+			clogTitle.setText("Trade log · " + (++clogCount) + " items");
+			clogGrid.revalidate();
 		});
 	}
 
