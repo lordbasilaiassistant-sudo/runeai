@@ -155,6 +155,10 @@ public class RuneAIPlugin extends Plugin
 	private int lastKillTick = -1000;
 	private boolean wasUnderAttack;
 
+	// pet follower state: Rune trails the player like a real OSRS pet
+	private WorldPoint petTile;
+	private WorldPoint petPrevTile;
+
 	// ---- session P&L ledger (inventory+equipment deltas at GE value) ----
 	private Map<Integer, Integer> lastHolding;
 	private long sessionPnl;
@@ -372,6 +376,9 @@ public class RuneAIPlugin extends Plugin
 			{
 				sugFills++;
 			}
+			mascot.celebrate(buying
+				? "Bought! Now sell it."
+				: "Cha-ching! Sold.");
 			offerTracks[slot] = null;
 		}
 		else if (st == net.runelite.api.GrandExchangeOfferState.CANCELLED_BUY
@@ -426,6 +433,21 @@ public class RuneAIPlugin extends Plugin
 		if (lp == null)
 		{
 			return;
+		}
+
+		// pet follower: move to the player's previous tile, teleport-catchup if left behind
+		final WorldPoint me = lp.getWorldLocation();
+		if (petTile == null || petTile.distanceTo(me) > 5 || petTile.getPlane() != me.getPlane())
+		{
+			petTile = me.dx(-1); // spawn/catchup beside the player, like a real pet
+			petPrevTile = petTile;
+			mascot.setPetTiles(petPrevTile, petTile, System.currentTimeMillis());
+		}
+		else if (lastPos != null && !lastPos.equals(me) && petTile.distanceTo(me) > 1)
+		{
+			petPrevTile = petTile;
+			petTile = lastPos; // step into the tile the player just left
+			mascot.setPetTiles(petPrevTile, petTile, System.currentTimeMillis());
 		}
 
 		flipService.maybeRefresh();
