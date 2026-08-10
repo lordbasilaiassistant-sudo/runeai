@@ -279,6 +279,37 @@ public class GeFlipOverlay extends Overlay
 		final boolean selling = client.getVarbitValue(4397) == 1;
 		long qty;
 		long total;
+		if (!selling)
+		{
+			// allocation guard: buying MORE of something you haven't sold through
+			// concentrates capital in an unproven exit — flag it loudly
+			long unsold = 0;
+			final ItemContainer inv2 = client.getItemContainer(InventoryID.INVENTORY);
+			if (inv2 != null)
+			{
+				for (Item it : inv2.getItems())
+				{
+					if (it != null && it.getId() > 0 && itemManager.canonicalize(it.getId()) == itemId)
+					{
+						unsold += it.getQuantity();
+					}
+				}
+			}
+			for (net.runelite.api.GrandExchangeOffer of : client.getGrandExchangeOffers())
+			{
+				if (of != null && of.getItemId() == itemId
+					&& (of.getState() == net.runelite.api.GrandExchangeOfferState.SELLING))
+				{
+					unsold += of.getTotalQuantity() - of.getQuantitySold();
+				}
+			}
+			if (unsold > 0)
+			{
+				g.setFont(g.getFont().deriveFont(Font.BOLD, 13f));
+				g.setColor(new Color(255, 100, 100));
+				g.drawString(String.format("⚠ %,d unsold already — sell through first", unsold), 10, 138);
+			}
+		}
 		if (selling)
 		{
 			// selling: dump the full stack you hold at the undercut price

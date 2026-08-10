@@ -442,6 +442,9 @@ public class RuneAIPlugin extends Plugin
 					tr.lastQty = (int) saved[2];
 					tr.lastSpent = saved[3];
 					tr.startMs = saved[4];
+					// restore the stall clock too — a quiet offer must not look
+					// freshly-filled just because the client restarted
+					tr.lastFillMs = saved.length > 5 ? saved[5] : saved[4];
 				}
 				offerTracks[slot] = tr;
 				saveOfferState();
@@ -817,7 +820,7 @@ public class RuneAIPlugin extends Plugin
 				if (t != null)
 				{
 					out.put(String.valueOf(i),
-						new long[]{t.itemId, t.price, t.lastQty, t.lastSpent, t.startMs});
+						new long[]{t.itemId, t.price, t.lastQty, t.lastSpent, t.startMs, t.lastFillMs});
 				}
 			}
 			Files.write(new File(DATA_DIR, "offer-state.json").toPath(),
