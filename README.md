@@ -62,7 +62,7 @@ If your inventory hits 28 items while you are doing a **non-combat** activity, t
 On a free-to-play world, RuneAI tracks how close you are to buying an Old School Bond. Roughly every 50 ticks it prices the bond from the GE and compares it against your total worth — inventory + equipment, plus your bank as of the last time you opened it. The sidebar shows a **Bond fund** row as a percentage (`63% of 12,000k`, with a `*` while the bank has never been opened this session, `members ✓` on a members world). When your worth first covers the bond price, a `You can afford a BOND — go members!` alert fires once with the voice line "You can afford a bond. Time to go members."
 
 ### Kokoro voice callouts (local, offline)
-Voice is seven pre-rendered WAV files (mono 16-bit PCM, 24 kHz) generated with local Kokoro TTS and bundled as plugin resources in `src/main/resources/com/runeai/voice/`:
+Voice is eight pre-rendered WAV files (mono 16-bit PCM, 24 kHz) generated with local Kokoro TTS and bundled as plugin resources in `src/main/resources/com/runeai/voice/`:
 
 | Key | Line |
 | --- | --- |
@@ -73,6 +73,7 @@ Voice is seven pre-rendered WAV files (mono 16-bit PCM, 24 kHz) generated with l
 | `attacked` | "You're under attack." |
 | `pot` | "Pot up. Drink your potion." |
 | `bond` | "You can afford a bond. Time to go members." |
+| `levelup` | "Nice one. Level up!" |
 
 Playback goes through a single-thread speech queue, so lines never overlap — one finishes (plus a 400 ms breath) before the next starts, and if two lines are already queued, new ones are dropped rather than backlogged. Each line also has a 12-second per-key cooldown so RuneAI never nags. No network call is ever made to speak — there is no TTS API in this plugin.
 
@@ -218,3 +219,8 @@ Next up:
 - Ship the trained danger model as JSON weights read by the plugin, turning the recorded ticks into a live "you're about to take damage" warning.
 - Broaden activity detection beyond the current seven activities and the current object keyword lists.
 - More voice lines and a Plugin Hub submission once the guidance set is stable.
+
+## Who made this
+
+[Broke to Built](https://broke2builtai.com) — a company of machines, building
+things it gives away. This is one of them; the rest are free too.
