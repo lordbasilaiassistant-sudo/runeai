@@ -146,6 +146,22 @@ class ItemMemory
 		dirty = true; // scan-rate update: one file write per scan, not per item
 	}
 
+	/**
+	 * Has this player actually traded the item, or is the entry just the scan
+	 * loop's predictability bookkeeping?
+	 *
+	 * <p>{@link #recordPredictionError} runs for EVERY item in the wiki's latest
+	 * dump — several thousand of them, every 60 seconds — so within a minute of
+	 * startup {@code memory.get(id)} is non-null for essentially the whole game.
+	 * That is fine as a live signal and wrong as an answer to "do we know this
+	 * item": it is what silently retired the bandit's exploration bonus, and it is
+	 * why {@link #save} refuses to persist these rows.
+	 */
+	static boolean traded(Stats s)
+	{
+		return s != null && (s.fills > 0 || s.stalls > 0 || s.totalProfit != 0);
+	}
+
 	void recordStall(int itemId, FlipLane lane)
 	{
 		final Stats s = memory.computeIfAbsent(itemId, k -> new Stats());
@@ -238,7 +254,10 @@ class ItemMemory
 		{
 			return 1.05; // exploration optimism for the unknown
 		}
-		double m = 1.0;
+		// an entry the scan loop created for its predictability EWMA is not a
+		// traded item, and must not read as one — otherwise every item on the
+		// board becomes "known" one scan after login and nothing is ever explored
+		double m = traded(s) ? 1.0 : 1.05;
 		final long now = System.currentTimeMillis();
 		if (coolingDown(s, now))
 		{
@@ -411,17 +430,31 @@ class ItemMemory
 		}
 	}
 
+	/**
+	 * Persist the items this player has actually traded.
+	 *
+	 * <p>Two things are deliberate. Only {@link #traded} rows are written — the
+	 * scan loop touches every item on the wiki every minute, and persisting those
+	 * turned a few-KB file into a multi-megabyte rewrite once a minute, forever.
+	 * The predictability EWMA on an untraded item is worth exactly one session and
+	 * is rebuilt within a scan of the next one.
+	 *
+	 * <p>And the write itself is handed to {@link AsyncWriter}: this is called
+	 * from {@code recordFill}, which runs on the client thread inside a GE event.
+	 */
 	private synchronized void save()
 	{
 		try
 		{
-			FILE.getParentFile().mkdirs();
 			final Map<String, Stats> raw = new java.util.HashMap<>();
 			for (Map.Entry<Integer, Stats> e : memory.entrySet())
 			{
-				raw.put(String.valueOf(e.getKey()), e.getValue());
+				if (traded(e.getValue()))
+				{
+					raw.put(String.valueOf(e.getKey()), e.getValue());
+				}
 			}
-			Files.write(FILE.toPath(), gson.toJson(raw).getBytes(StandardCharsets.UTF_8));
+			AsyncWriter.write(FILE, gson.toJson(raw));
 		}
 		catch (Exception ex)
 		{

@@ -32,6 +32,61 @@ public class TradeHistoryTest
 		return new TradeHistory.Entry(id, qty, price, false);
 	}
 
+	/**
+	 * The audit's own failure mode, and the one that actually bit: on a fresh
+	 * install the game lists trades from before RuneAI existed, every one of them
+	 * comes back UNBOOKED, and the player is told their ledger is millions out
+	 * because of trades it was never asked to book.
+	 */
+	@Test
+	public void tradesOlderThanOurLedgerAreNotOurDiscrepancies()
+	{
+		// the game remembers four trades; we have booked one of them
+		final List<TradeHistory.Entry> game = Arrays.asList(
+			buy(453, 1000, 150), sell(453, 1000, 160), buy(561, 500, 90), sell(561, 500, 100));
+		final List<TradeHistory.Entry> booked = Collections.singletonList(sell(561, 500, 100));
+		final List<TradeHistory.Discrepancy> diffs = TradeHistory.reconcile(game, booked);
+		assertEquals(3, diffs.size()); // reconcile still reports everything it found
+
+		final List<TradeHistory.Discrepancy> real =
+			TradeHistory.auditable(diffs, game.size(), booked.size());
+		assertTrue("nothing predating the ledger may reach the player", real.isEmpty());
+		assertEquals(0, TradeHistory.netDelta(real));
+		assertEquals(3, TradeHistory.predatingLedger(diffs, game.size(), booked.size()));
+	}
+
+	/** The filter must not become a way for real holes to disappear. */
+	@Test
+	public void aGapInsideOurOwnLedgerIsStillReported()
+	{
+		final List<TradeHistory.Entry> game = Arrays.asList(
+			sell(453, 1000, 160), sell(561, 500, 100));
+		// two booked offers, so nothing is old enough to be excused
+		final List<TradeHistory.Entry> booked = Arrays.asList(
+			sell(453, 1000, 160), sell(999, 1, 1));
+		final List<TradeHistory.Discrepancy> diffs = TradeHistory.reconcile(game, booked);
+		final List<TradeHistory.Discrepancy> real =
+			TradeHistory.auditable(diffs, game.size(), booked.size());
+		assertEquals(1, real.size());
+		assertEquals(TradeHistory.Kind.UNBOOKED, real.get(0).getKind());
+		assertEquals(561, real.get(0).getItemId());
+		assertEquals(50_000, TradeHistory.netDelta(real)); // a sell we never counted
+	}
+
+	/** A price disagreement is never "old" — only unbooked rows can predate us. */
+	@Test
+	public void onlyUnbookedRowsCanBeExcusedAsOld()
+	{
+		final List<TradeHistory.Entry> game = Arrays.asList(
+			sell(453, 1000, 170), buy(561, 500, 90), buy(562, 500, 90));
+		final List<TradeHistory.Entry> booked = Collections.singletonList(sell(453, 1000, 160));
+		final List<TradeHistory.Discrepancy> diffs = TradeHistory.reconcile(game, booked);
+		final List<TradeHistory.Discrepancy> real =
+			TradeHistory.auditable(diffs, game.size(), booked.size());
+		assertEquals(1, real.size());
+		assertEquals(TradeHistory.Kind.PRICE, real.get(0).getKind());
+	}
+
 	@Test
 	public void anAgreeingLedgerReportsNothing()
 	{

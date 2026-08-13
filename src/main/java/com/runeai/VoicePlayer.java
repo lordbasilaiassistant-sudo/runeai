@@ -46,15 +46,52 @@ class VoicePlayer
 	private final Map<String, Long> lastPlayed = new ConcurrentHashMap<>();
 
 	// one mouth: a single-thread queue so lines can NEVER overlap
-	private final java.util.concurrent.ExecutorService speechQueue =
-		java.util.concurrent.Executors.newSingleThreadExecutor(r ->
+	private volatile java.util.concurrent.ExecutorService speechQueue = newQueue();
+	private final java.util.concurrent.atomic.AtomicInteger queued =
+		new java.util.concurrent.atomic.AtomicInteger();
+	/** False between {@code shutdown()} and the next {@code start()} — nothing speaks. */
+	private volatile boolean running = true;
+
+	private static java.util.concurrent.ExecutorService newQueue()
+	{
+		return java.util.concurrent.Executors.newSingleThreadExecutor(r ->
 		{
 			final Thread t = new Thread(r, "runeai-voice");
 			t.setDaemon(true);
 			return t;
 		});
-	private final java.util.concurrent.atomic.AtomicInteger queued =
-		new java.util.concurrent.atomic.AtomicInteger();
+	}
+
+	/**
+	 * Arm the voice. RuneLite reuses one plugin instance across enable/disable,
+	 * and so it reuses this singleton — so the queue has to be re-created when
+	 * {@link #shutdown()} has torn it down, or a re-enabled plugin is mute.
+	 */
+	synchronized void start()
+	{
+		if (speechQueue.isShutdown())
+		{
+			speechQueue = newQueue();
+		}
+		queued.set(0); // tasks shutdownNow() dropped never ran their decrement
+		running = true;
+	}
+
+	/**
+	 * Stop talking, now. Called from {@code shutDown()}: without it a line that
+	 * was queued or mid-playback when the player disabled RuneAI kept speaking
+	 * out of a plugin that no longer exists, and the mascot's bubble kept the
+	 * text alive with nothing left to clear it.
+	 */
+	synchronized void shutdown()
+	{
+		running = false;
+		speechQueue.shutdownNow(); // interrupts the playback loop's sleep
+		queued.set(0);
+		lastPlayed.clear();
+		mouth = 0f;
+		speakingText = null;
+	}
 
 	private volatile float mouth;
 	private volatile String speakingText;
@@ -79,7 +116,7 @@ class VoicePlayer
 
 	void play(String key)
 	{
-		if (!config.voiceCallouts())
+		if (!running || !config.voiceCallouts())
 		{
 			return;
 		}
@@ -96,17 +133,39 @@ class VoicePlayer
 		}
 		lastPlayed.put(key, now);
 		queued.incrementAndGet();
-		speechQueue.submit(() ->
+		submit(() -> speak(key));
+	}
+
+	/**
+	 * Hand a line to the queue, keeping {@link #queued} honest even when the
+	 * queue has been shut down under us by {@link #shutdown()}.
+	 */
+	private void submit(Runnable line)
+	{
+		try
 		{
-			try
+			speechQueue.submit(() ->
 			{
-				speak(key);
-			}
-			finally
-			{
-				queued.decrementAndGet();
-			}
-		});
+				try
+				{
+					line.run();
+				}
+				finally
+				{
+					release();
+				}
+			});
+		}
+		catch (java.util.concurrent.RejectedExecutionException stopped)
+		{
+			release();
+		}
+	}
+
+	/** Give a queue slot back, never below zero — shutdown() resets the counter too. */
+	private void release()
+	{
+		queued.updateAndGet(v -> Math.max(0, v - 1));
 	}
 
 	private void speak(String key)
@@ -144,8 +203,8 @@ class VoicePlayer
 		try
 		{
 			// amplitude envelope: one value per ~33ms hop, normalized to peak
-			final int frameBytes = fmt.getFrameSize();
-			final int hopFrames = (int) (fmt.getFrameRate() / 30);
+			final int frameBytes = Math.max(1, fmt.getFrameSize());
+			final int hopFrames = Math.max(1, (int) (fmt.getFrameRate() / 30));
 			final int hops = Math.max(1, pcm.length / frameBytes / hopFrames);
 			final float[] env = new float[hops];
 			float peak = 1;
@@ -183,14 +242,26 @@ class VoicePlayer
 			speakingText = text;
 			clip.start();
 
-			// drive the mouth from actual playback position
-			while (clip.isOpen())
+			// drive the mouth from actual playback position. The clip plays on the
+			// mixer's own thread, so an interrupt here has to close the line
+			// explicitly — otherwise shutdown() returns and the plugin keeps
+			// talking out of a disabled plugin until the clip runs out.
+			try
 			{
-				final int hop = clip.getFramePosition() / hopFrames;
-				mouth = hop < hops ? env[hop] : 0f;
-				Thread.sleep(33);
+				while (clip.isOpen())
+				{
+					final int hop = clip.getFramePosition() / hopFrames;
+					mouth = hop < hops ? env[hop] : 0f;
+					Thread.sleep(33);
+				}
+				Thread.sleep(400); // breath between queued lines
 			}
-			Thread.sleep(400); // breath between queued lines
+			catch (InterruptedException interrupted)
+			{
+				Thread.currentThread().interrupt();
+				clip.stop();
+				clip.close();
+			}
 		}
 		finally
 		{
@@ -207,7 +278,7 @@ class VoicePlayer
 	 * audio arrives as bytes from a TTS service instead of a bundled resource.
 	 *
 	 * <p><b>No audio is the normal case, not a failure.</b> The bundled Kokoro
-	 * clips are pre-rendered for seven fixed lines; there is no local
+	 * clips are pre-rendered for a fixed set of coaching lines; there is no local
 	 * synthesiser in this plugin, so arbitrary text has no local voice today and
 	 * shows in the mascot's bubble instead, held long enough to read.
 	 *
@@ -216,12 +287,12 @@ class VoicePlayer
 	 */
 	void say(String text, byte[] audio, String contentType)
 	{
-		if (text == null || text.isEmpty() || queued.get() >= 2)
+		if (!running || text == null || text.isEmpty() || queued.get() >= 2)
 		{
 			return;
 		}
 		queued.incrementAndGet();
-		speechQueue.submit(() ->
+		submit(() ->
 		{
 			try
 			{
@@ -233,10 +304,6 @@ class VoicePlayer
 			catch (Exception ex)
 			{
 				log.warn("commentary playback failed", ex);
-			}
-			finally
-			{
-				queued.decrementAndGet();
 			}
 		});
 	}

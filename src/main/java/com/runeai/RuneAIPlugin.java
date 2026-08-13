@@ -262,6 +262,7 @@ public class RuneAIPlugin extends Plugin
 	{
 		DATA_DIR.mkdirs();
 		prettyGson = gson.newBuilder().setPrettyPrinting().create();
+		resetSessionState();
 
 		// one-time migration: the old loot defaults (100 gp / 0.05%) proved too chatty
 		// and were already persisted into the profile — unset so the new defaults apply
@@ -298,6 +299,7 @@ public class RuneAIPlugin extends Plugin
 			.build();
 		sessionStartMs = System.currentTimeMillis();
 		sessionHistory.begin(sessionStartMs);
+		voice.start(); // the queue is torn down in shutDown(); re-arm it
 		dangerModel.loadAsync(); // reads a file: never on the client thread
 		// the co-host is not started at all unless the player asked for it: with the
 		// toggle off nothing here ever collects a beat or builds a request
@@ -337,12 +339,67 @@ public class RuneAIPlugin extends Plugin
 		log.info("RuneAI plugin started (data dir {})", DATA_DIR.getAbsolutePath());
 	}
 
+	/**
+	 * Wipe everything that belongs to ONE run of the plugin.
+	 *
+	 * <p>RuneLite does not build a new plugin object when you toggle RuneAI off
+	 * and on — {@code startUp()} runs again on the same instance with all of its
+	 * fields exactly as the last run left them. Every {@code loadX()} below then
+	 * reads the same file into the same live collection a second time, and
+	 * {@code bookedOffers} in particular is an {@code addAll}: one disable/enable
+	 * and the trade audit is diffing the game's history against a doubled ledger.
+	 * The session counters have the milder version of the same problem — a "new"
+	 * session that opens holding the previous one's P&L.
+	 */
+	private void resetSessionState()
+	{
+		bookedOffers.clear();
+		flipBasis.clear();
+		tradeClog.clear();
+		savedOfferState = new java.util.HashMap<>();
+		java.util.Arrays.fill(offerTracks, null);
+		buyFillSecs.clear();
+		sellFillSecs.clear();
+		anomalyFeed.clear();
+		lastAnomalyAlertMs.clear();
+		lastXp.clear();
+		lastLevel.clear();
+		flipRealized = 0;
+		sessionPnl = 0;
+		gainedValue = 0;
+		droppedValue = 0;
+		xpGainedSession = 0;
+		sessionFills = 0;
+		unitsBought = 0;
+		unitsSold = 0;
+		sugFills = 0;
+		sugCancels = 0;
+		firstOfferMs = 0;
+		lastFlipGpHr = 0;
+		lastFlipScanLogMs = 0;
+		lastSellProfit = 0;
+		bankValue = -1;
+		bondAnnounced = false;
+		lastHolding = null;
+		greeted = false;
+		snapshotAtTick = -1;
+		clogPopulated = false; // the panel is rebuilt too — it needs repopulating
+		historyReadTick = -1;
+		historyRetried = false;
+		historyRawLogged = false;
+		dangerBoost = 0;
+		wasUnderAttack = false;
+		petTile = null;
+		petPrevTile = null;
+	}
+
 	@Override
 	protected void shutDown() throws Exception
 	{
 		chatCommandManager.unregisterCommand("!profit");
 		chatCommandManager.unregisterCommand("!lvl");
 		streamer.stop();
+		voice.shutdown();
 		sessionHistory.finish();
 		clientToolbar.removeNavigation(navButton);
 		overlayManager.remove(overlay);
@@ -359,6 +416,8 @@ public class RuneAIPlugin extends Plugin
 			tickLog.close();
 			tickLog = null;
 		}
+		// the ledgers are written off-thread; make sure the last snapshot landed
+		AsyncWriter.flush(2_000);
 		log.info("RuneAI plugin stopped");
 	}
 
@@ -368,10 +427,13 @@ public class RuneAIPlugin extends Plugin
 	{
 		try
 		{
+			// the CAPTURE has to be on the client thread — it walks the whole scene.
+			// The write does not, and this is the biggest file RuneAI produces.
 			final Map<String, Object> snap = GameStateSnapshot.capture(client);
 			final File f = new File(DATA_DIR, "snapshot-" + LocalDateTime.now().format(STAMP) + ".json");
-			Files.write(f.toPath(), prettyGson.toJson(snap).getBytes(StandardCharsets.UTF_8));
-			log.info("RuneAI snapshot written: {} ({} KB)", f.getAbsolutePath(), f.length() / 1024);
+			final String json = prettyGson.toJson(snap);
+			AsyncWriter.write(f, json);
+			log.info("RuneAI snapshot queued: {} ({} KB)", f.getAbsolutePath(), json.length() / 1024);
 		}
 		catch (Exception ex)
 		{
@@ -496,8 +558,12 @@ public class RuneAIPlugin extends Plugin
 				tr.lastFillMs = nowMs;
 				tr.lane = flipService.laneFor(o.getItemId());
 				// restart-safe: if we tracked this exact offer before the client
-				// restarted, resume its counters — never re-book old fills
-				final long[] saved = savedOfferState.get(String.valueOf(slot));
+				// restarted, resume its counters — never re-book old fills.
+				// remove() not get(): this is a ONE-SHOT resume of what was on disk
+				// at startup. Left in the map it also matches the next offer this
+				// session puts in the same slot for the same item at the same price,
+				// which resumes counters that offer never earned and swallows its fills.
+				final long[] saved = savedOfferState.remove(String.valueOf(slot));
 				if (saved != null && saved[0] == o.getItemId() && saved[1] == o.getPrice())
 				{
 					tr.lastQty = (int) saved[2];
@@ -651,6 +717,12 @@ public class RuneAIPlugin extends Plugin
 				? "Bought! Now sell it."
 				: "Cha-ching! Sold.");
 			offerTracks[slot] = null;
+			// and persist the EMPTY slot. offer-state.json is what a restart
+			// resumes from, so a finished offer left in it is a live trap: place a
+			// new offer for the same item at the same price after a restart and it
+			// resumes the old counters, quantitySold starts below lastQty, and
+			// every unit of the new offer books as zero — silently, forever.
+			saveOfferState();
 		}
 		else if (st == net.runelite.api.GrandExchangeOfferState.CANCELLED_BUY
 			|| st == net.runelite.api.GrandExchangeOfferState.CANCELLED_SELL)
@@ -667,6 +739,7 @@ public class RuneAIPlugin extends Plugin
 			}
 			itemMemory.recordStall(o.getItemId(), lane); // it stopped working — learn that
 			offerTracks[slot] = null;
+			saveOfferState(); // same as above: a cancelled slot must not be resumable
 		}
 
 		final Map<String, Object> d = m();
@@ -1108,14 +1181,24 @@ public class RuneAIPlugin extends Plugin
 
 		final List<TradeHistory.Discrepancy> diffs =
 			TradeHistory.reconcile(parsed, bookedOffers);
-		final long net = TradeHistory.netDelta(diffs);
 		final int matched = parsed.size() - diffs.size();
+
+		// The game's history reaches further back than our ledger does, so its
+		// oldest rows are legitimately unbooked and are not our discrepancies.
+		// See TradeHistory.auditable — every diff is still written to the event
+		// log below, because the log is the dataset and the alert is the
+		// interruption, and they are allowed different budgets.
+		final List<TradeHistory.Discrepancy> real =
+			TradeHistory.auditable(diffs, parsed.size(), bookedOffers.size());
+		final int older = diffs.size() - real.size();
+		final long net = TradeHistory.netDelta(real);
 
 		final Map<String, Object> d = m();
 		d.put("rows", rows.size());
 		d.put("parsed", parsed.size());
 		d.put("unreadable", unreadable);
 		d.put("matched", matched);
+		d.put("predateLedger", older);
 		d.put("netDelta", net);
 		final List<Map<String, Object>> ds = new ArrayList<>();
 		for (TradeHistory.Discrepancy x : diffs)
@@ -1130,33 +1213,38 @@ public class RuneAIPlugin extends Plugin
 		d.put("discrepancies", ds);
 		emit("geHistoryAudit", d);
 
-		final String summary = diffs.isEmpty()
-			? String.format("ledger matches the game on %d of %d trades", matched, parsed.size())
-			: String.format("%d of %d trades disagree · %+,d gp", diffs.size(), parsed.size(), net);
+		final int audited = parsed.size() - older;
+		final String summary = real.isEmpty()
+			? String.format("ledger matches the game on %d of %d trades", matched, audited)
+			: String.format("%d of %d trades disagree · %+,d gp", real.size(), audited, net);
 		final StringBuilder tip = new StringBuilder("<html>");
 		tip.append(String.format("%d rows read, %d readable", rows.size(), parsed.size()));
+		if (older > 0)
+		{
+			tip.append(String.format("<br>%d row(s) predate RuneAI's ledger — not audited", older));
+		}
 		if (unreadable > 0)
 		{
 			tip.append(String.format("<br>%d row(s) the parser could not read — logged as geHistoryRow", unreadable));
 		}
-		for (TradeHistory.Discrepancy x : diffs)
+		for (TradeHistory.Discrepancy x : real)
 		{
 			tip.append("<br>").append(client.getItemDefinition(x.getItemId()).getName())
 				.append(": ").append(x.getDetail());
 		}
-		panel.setAudit(summary, diffs.isEmpty(), tip.append("</html>").toString());
+		panel.setAudit(summary, real.isEmpty(), tip.append("</html>").toString());
 
 		// one summary line, not one per row — an audit that spams is an audit
 		// nobody reads
 		client.addChatMessage(ChatMessageType.GAMEMESSAGE, "",
 			"<col=00b4ff>RuneAI</col> trade history audit — " + summary
 				+ (unreadable > 0 ? String.format(" (%d row(s) unreadable)", unreadable) : ""), null);
-		if (!diffs.isEmpty())
+		if (!real.isEmpty())
 		{
 			overlay.setAlert(String.format("LEDGER OFF BY %+,d gp", net), client.getTickCount() + 12);
 		}
-		log.info("GE history audit: {} rows, {} parsed, {} matched, net {}",
-			rows.size(), parsed.size(), matched, net);
+		log.info("GE history audit: {} rows, {} parsed, {} matched, {} predate the ledger, net {}",
+			rows.size(), parsed.size(), matched, older, net);
 	}
 
 	/** Record a finished offer at the granularity the game's history reports. */
@@ -1200,8 +1288,9 @@ public class RuneAIPlugin extends Plugin
 	{
 		try
 		{
-			Files.write(new File(DATA_DIR, "booked-offers.json").toPath(),
-				gson.toJson(bookedOffers).getBytes(StandardCharsets.UTF_8));
+			// every save() below runs on the client thread, inside a GE event or the
+			// tick loop — serialise here, let AsyncWriter do the blocking part
+			AsyncWriter.write(new File(DATA_DIR, "booked-offers.json"), gson.toJson(bookedOffers));
 		}
 		catch (Exception ex)
 		{
@@ -1407,9 +1496,15 @@ public class RuneAIPlugin extends Plugin
 			final File f = new File(DATA_DIR, "offer-state.json");
 			if (f.exists())
 			{
-				savedOfferState = gson.fromJson(
+				final Map<String, long[]> raw = gson.fromJson(
 					new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8),
 					new com.google.gson.reflect.TypeToken<Map<String, long[]>>(){}.getType());
+				if (raw != null)
+				{
+					// never let a truncated or empty file leave the resume map null:
+					// it is dereferenced from a GE event on the client thread
+					savedOfferState = raw;
+				}
 			}
 		}
 		catch (Exception ex)
@@ -1432,8 +1527,7 @@ public class RuneAIPlugin extends Plugin
 						t.lastSpent, t.startMs, t.lastFillMs, t.lane.ordinal()});
 				}
 			}
-			Files.write(new File(DATA_DIR, "offer-state.json").toPath(),
-				gson.toJson(out).getBytes(StandardCharsets.UTF_8));
+			AsyncWriter.write(new File(DATA_DIR, "offer-state.json"), gson.toJson(out));
 		}
 		catch (Exception ex)
 		{
@@ -1467,8 +1561,7 @@ public class RuneAIPlugin extends Plugin
 	{
 		try
 		{
-			Files.write(new File(DATA_DIR, "trade-clog.json").toPath(),
-				gson.toJson(tradeClog).getBytes(StandardCharsets.UTF_8));
+			AsyncWriter.write(new File(DATA_DIR, "trade-clog.json"), gson.toJson(tradeClog));
 		}
 		catch (Exception ex)
 		{
@@ -1518,9 +1611,8 @@ public class RuneAIPlugin extends Plugin
 	{
 		try
 		{
-			Files.write(new File(DATA_DIR, "trader.json").toPath(),
-				gson.toJson(Map.of("xp", traderXp, "lifetime", lifetimeRealized))
-					.getBytes(StandardCharsets.UTF_8));
+			AsyncWriter.write(new File(DATA_DIR, "trader.json"),
+				gson.toJson(Map.of("xp", traderXp, "lifetime", lifetimeRealized)));
 		}
 		catch (Exception ex)
 		{
@@ -1540,8 +1632,7 @@ public class RuneAIPlugin extends Plugin
 					raw.put(String.valueOf(e.getKey()), e.getValue());
 				}
 			}
-			Files.write(new File(DATA_DIR, "flip-basis.json").toPath(),
-				gson.toJson(raw).getBytes(StandardCharsets.UTF_8));
+			AsyncWriter.write(new File(DATA_DIR, "flip-basis.json"), gson.toJson(raw));
 		}
 		catch (Exception ex)
 		{
@@ -2238,12 +2329,20 @@ public class RuneAIPlugin extends Plugin
 		return id == net.runelite.api.ItemID.COINS_995 ? 1 : itemManager.getItemPrice(id);
 	}
 
+	/**
+	 * The session ledger, and the carried-holdings snapshot it is derived from.
+	 *
+	 * <p>The snapshot is taken whether or not {@code trackPnl} is on, and the
+	 * gate now covers only the ledger arithmetic. It used to be the first line of
+	 * this method, which meant switching P&L tracking off also left
+	 * {@link #lastHolding} permanently null — and {@link #totalWorth()} is built
+	 * on it. Three unrelated features quietly degraded: the bond ladder counted
+	 * the bank and nothing the player was carrying, the wealth-relative loot
+	 * threshold collapsed to its flat gp floor, and the recorded tick vector's
+	 * {@code worth} column went wrong for the whole session.
+	 */
 	private void updatePnl()
 	{
-		if (!config.trackPnl())
-		{
-			return;
-		}
 		final Map<Integer, Integer> holding = new java.util.HashMap<>();
 		for (net.runelite.api.InventoryID cid : new net.runelite.api.InventoryID[]{
 			net.runelite.api.InventoryID.INVENTORY, net.runelite.api.InventoryID.EQUIPMENT})
@@ -2262,7 +2361,7 @@ public class RuneAIPlugin extends Plugin
 			}
 		}
 
-		if (lastHolding != null && !pnlPaused())
+		if (config.trackPnl() && lastHolding != null && !pnlPaused())
 		{
 			long delta = 0;
 			final Set<Integer> ids = new java.util.HashSet<>(holding.keySet());
@@ -2398,11 +2497,19 @@ public class RuneAIPlugin extends Plugin
 	{
 		final WorldPoint wp = event.getTile().getWorldLocation();
 
+		// LONG math, once, for both consumers. Stack value overflows an int at
+		// ~2.1B, which a dropped stack of anything expensive clears easily — and
+		// an overflowed value wraps NEGATIVE, so the single loot flash worth
+		// shouting about is the one that silently fails the threshold test. The
+		// event-stream copy below was already computing this in long; the alert
+		// path was not, and they are the same number.
+		final long value = (long) itemManager.getItemPrice(event.getItem().getId())
+			* event.getItem().getQuantity();
+
 		// loot flash: nearby drop worth picking up (GE value filter)
 		final Player lp = client.getLocalPlayer();
 		if (lp != null && lp.getWorldLocation().distanceTo(wp) <= 8)
 		{
-			final int value = itemManager.getItemPrice(event.getItem().getId()) * event.getItem().getQuantity();
 
 			// spawned right after we clicked Drop on this item id -> OUR drop:
 			// feeds the xp-vs-gp goal signal instead of flashing as loot
@@ -2432,7 +2539,8 @@ public class RuneAIPlugin extends Plugin
 				}
 				else if (value >= threshold)
 				{
-					overlay.flashTile(wp, RuneAIOverlay.LOOT, name + " · " + value + " gp",
+					overlay.flashTile(wp, RuneAIOverlay.LOOT,
+						String.format("%s · %,d gp", name, value),
 						client.getTickCount() + 12);
 					voice.play("loot");
 				}
@@ -2444,10 +2552,9 @@ public class RuneAIPlugin extends Plugin
 		d.put("qty", event.getItem().getQuantity());
 		d.put("pos", wp.getX() + "," + wp.getY() + "," + wp.getPlane());
 		// absolute AND wealth-relative value — models learn that "good drop" scales with the bank
-		final long v = (long) itemManager.getItemPrice(event.getItem().getId()) * event.getItem().getQuantity();
 		final long tw = totalWorth();
-		d.put("value", v);
-		d.put("worthRatio", tw > 0 ? (double) v / tw : 0.0);
+		d.put("value", value);
+		d.put("worthRatio", tw > 0 ? (double) value / tw : 0.0);
 		emit("itemSpawn", d);
 	}
 

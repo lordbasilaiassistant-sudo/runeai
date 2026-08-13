@@ -378,6 +378,51 @@ class TradeHistory
 		return out;
 	}
 
+	/**
+	 * The discrepancies that are actually OURS, out of everything
+	 * {@link #reconcile} found.
+	 *
+	 * <p>The game's Trade History reaches further back than our ledger does: it
+	 * lists the account's last trades, while we only book offers we watched from
+	 * placement, and only since the plugin was installed. Every row older than our
+	 * first booked offer therefore comes back UNBOOKED, and reporting those to the
+	 * player accuses their ledger of losing money it never had — a first audit
+	 * would announce a multi-million-gp hole made entirely of trades from before
+	 * RuneAI existed.
+	 *
+	 * <p>At most {@code gameRows - bookedRows} rows can predate us, so that many
+	 * UNBOOKED findings are set aside. Anything past that count is a genuine gap
+	 * and is still reported. Nothing is deleted — the caller logs the full diff
+	 * either way; this only decides what is worth interrupting a human over.
+	 *
+	 * @return the reportable subset, in the order {@code reconcile} produced
+	 */
+	static List<Discrepancy> auditable(List<Discrepancy> diffs, int gameRows, int bookedRows)
+	{
+		if (diffs == null || diffs.isEmpty())
+		{
+			return List.of();
+		}
+		int budget = Math.max(0, gameRows - Math.max(0, bookedRows));
+		final List<Discrepancy> out = new ArrayList<>();
+		for (Discrepancy d : diffs)
+		{
+			if (d.getKind() == Kind.UNBOOKED && budget > 0)
+			{
+				budget--;
+				continue;
+			}
+			out.add(d);
+		}
+		return out;
+	}
+
+	/** How many findings {@link #auditable} set aside as older than our ledger. */
+	static int predatingLedger(List<Discrepancy> diffs, int gameRows, int bookedRows)
+	{
+		return (diffs == null ? 0 : diffs.size()) - auditable(diffs, gameRows, bookedRows).size();
+	}
+
 	/** Net correction the audit says our P&L is off by. */
 	static long netDelta(List<Discrepancy> ds)
 	{

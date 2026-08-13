@@ -41,6 +41,7 @@ All source lives in `src/main/java/com/runeai/`.
 | `RuneAIPanel.java` | RuneLite sidebar `PluginPanel` — game state, player, activity (+ gp/xp goal), session P&L, session scoreboard, live flips, per-lane and per-item results, trap board, bond fund, NPC/player/event counts, and the Ko-fi button. |
 | `GameStateSnapshot.java` | Static one-shot capture of the whole client state into a `Map` for a JSON dump. **Client thread only.** |
 | `EventLog.java` | Append-only JSONL writer (`{"t":iso,"tick":n,"e":type,...}`), flushes every 50 lines. |
+| `AsyncWriter.java` | The one place the small JSON state files are written. Callers serialise on their own thread and hand over the bytes; one daemon thread does the blocking write, coalescing per path. **Every `save()` in this plugin runs on the client thread — none of them may call `Files.write` directly.** `shutDown()` calls `flush(2_000)`. Writes land on a `.tmp` sibling and are renamed into place, so a hard client kill can never leave a half-written ledger. |
 | `FlipService.java` | Live GE intelligence off the wiki prices API: books, tax-aware margins, trap detection, lane classification, the velocity ranker, and the anomaly watch. Suggestions only. |
 | `FlipLane.java` | The QUICK / LONG taxonomy — pure classifier plus the volume-based cycle-time prior. |
 | `ItemMemory.java` | Per-item bandit memory persisted to `~/.runelite/runeai/item-memory.json`, with per-lane ledgers, recovery-based cooldown expiry, and the per-item results ranking (`rank()`). |
@@ -158,6 +159,11 @@ RuneLite events ──> RuneAIPlugin (@Subscribe handlers)
   from placement, so a completed offer re-firing as `BOUGHT` on login cannot invent a second trade.
   `reconcile()` is pure and accepts BOTH sell-price conventions (ask, or ask minus the 2%) because which
   one the interface quotes is not something we get to assume. Gated on `tradeAudit()`.
+  **The game's history reaches further back than our ledger does** — it lists the account's last trades,
+  we only book offers watched from placement — so `TradeHistory.auditable()` sets aside up to
+  `(rows read − offers booked)` UNBOOKED findings as older than us. Without it a first audit announces a
+  multi-million-gp "hole" made entirely of trades from before RuneAI was installed. Anything past that
+  count is a real gap and is still reported; the full diff goes to the event log either way.
   **The row parse is the uncertain half**: item id and stack size come off the widget model, but
   direction and price are read out of display text whose wording is only knowable from a live client.
   `parseRow()` returns null rather than guessing, and every raw row is written to the event log as
@@ -177,8 +183,16 @@ RuneLite events ──> RuneAIPlugin (@Subscribe handlers)
   Gated on `sessionScore()`.
 - **Per-item results** — `ItemMemory.rank()` → `panel.setItemStats(...)`, top 6 by realised gp. An item
   never timed reports `untimed` rather than the bandit's 300s starting value. Gated on `itemStats()`.
-- **Voice** — `VoicePlayer.LINES` is the source of truth for the seven keys and their text:
-  `idle`, `eat`, `bank`, `loot`, `attacked`, `pot`, `bond`.
+- **What item memory persists** — only `ItemMemory.traded()` rows (a fill, a stall, or realised gp).
+  `recordPredictionError()` runs for every item in the wiki dump on every 60s scan and creates an entry
+  for each, so "has an entry" is **not** the same question as "has been traded". Conflating the two
+  persisted the whole game to disk once a minute and silently retired the bandit's 1.05 exploration
+  bonus, because after one scan nothing was unknown any more. Use `traded()`, never `!= null`.
+- **Voice** — `VoicePlayer.LINES` is the source of truth for the eight keys and their text:
+  `idle`, `eat`, `bank`, `loot`, `attacked`, `pot`, `bond`, `levelup`. The queue is armed by
+  `voice.start()` in `startUp()` and torn down by `voice.shutdown()` in `shutDown()`, which interrupts
+  a line mid-playback — a `Clip` plays on the mixer's own thread, so it has to be closed explicitly or
+  a disabled plugin keeps talking.
 - **Streamer mode** — `StreamerService`, gated on `streamerMode()` (**default off**). `RuneAIPlugin.emit()`
   hands every event to `observe()`, which keeps seven types (`levelUp`, `geOffer`, `anomaly`, `guidance`,
   `death`, `itemSpawn`, `pnl`) and discards the rest; `beatOf()` turns one event into one sentence.
@@ -264,7 +278,7 @@ method, move it. `render()` runs every frame — keep the work in there minimal.
 
 Clips are bundled resources: `src/main/resources/com/runeai/voice/<key>.wav`, loaded by
 `VoicePlayer.speak()` at `/com/runeai/voice/<key>.wav`. Current keys: `idle`, `eat`, `bank`, `loot`,
-`attacked`, `pot`, `bond`. All seven shipped files are mono 16-bit PCM at 24 kHz.
+`attacked`, `pot`, `bond`, `levelup`. All eight shipped files are mono 16-bit PCM at 24 kHz.
 
 To add or change a line:
 
@@ -309,8 +323,14 @@ testing. Magic bytes may still reject a mislabelled body; they may never approve
   all are forbidden in hub plugins and all are avoidable here.
 - File IO stays inside `RuneLite.RUNELITE_DIR`; RuneAI uses `~/.runelite/runeai/` exclusively.
 - `log.debug()` for per-tick/per-event diagnostics. `log.info()` only for startup/shutdown or rare events.
-- Clean up in `shutDown()`: remove the nav button, remove both overlays, close both `EventLog`s.
-  Anything you add in `startUp()` must be undone there.
+- Clean up in `shutDown()`: remove the nav button, remove both overlays, close both `EventLog`s,
+  `voice.shutdown()`, `AsyncWriter.flush()`. Anything you add in `startUp()` must be undone there.
+- **RuneLite reuses ONE plugin instance across enable/disable.** `startUp()` runs again on the same
+  object with every field exactly as the last run left it, so anything session-scoped is reset in
+  `RuneAIPlugin.resetSessionState()` — add new session state there or it survives into the next run.
+  (`bookedOffers` was the sharp edge: `loadBookedOffers()` is an `addAll`, so one toggle doubled the
+  ledger the audit diffs against.) Singletons that own a thread need the same treatment:
+  `VoicePlayer.shutdown()` tears the speech queue down and `start()` rebuilds it.
 
 ### Jagex third-party client limits worth remembering
 

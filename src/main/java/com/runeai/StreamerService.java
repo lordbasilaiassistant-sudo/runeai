@@ -607,7 +607,7 @@ class StreamerService
 	 * the bundled clips; without one the line still shows in the mascot's bubble.
 	 *
 	 * <p><b>The bundled Kokoro clips cannot do this.</b> They are pre-rendered
-	 * WAVs for seven fixed lines — there is no local synthesiser in the plugin,
+	 * WAVs for a fixed set of coaching lines — there is no local synthesiser in the plugin,
 	 * so arbitrary commentary has no local voice today. Text-only is the honest
 	 * default and BYO-key TTS is the opt-in upgrade.
 	 */

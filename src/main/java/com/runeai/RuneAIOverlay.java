@@ -38,6 +38,9 @@ public class RuneAIOverlay extends Overlay
 	private final Client client;
 	private final RuneAIConfig config;
 	private final ModelOutlineRenderer outliner;
+	/** Tiles marked at once. More than a handful on screen is noise, not guidance. */
+	private static final int MAX_FLASHES = 16;
+
 	private final List<TileFlash> flashes = new CopyOnWriteArrayList<>();
 	private volatile String alertText;
 	private volatile int alertExpiresAtTick;
@@ -71,9 +74,25 @@ public class RuneAIOverlay extends Overlay
 		setLayer(OverlayLayer.ABOVE_SCENE);
 	}
 
-	/** Flash a tile with a label for N ticks — the "click here" primitive. */
+	/**
+	 * Flash a tile with a label for N ticks — the "click here" primitive.
+	 *
+	 * <p>Expiry is pruned HERE as well as in {@code render()}, because render is
+	 * not guaranteed to run: it returns on its first line when {@code showOverlays}
+	 * is off, and it does not run at all while the client is not drawing. The
+	 * triggers in {@code RuneAIPlugin} keep calling this either way, so leaving the
+	 * only cleanup inside the draw loop meant an unbounded list for anyone playing
+	 * with the overlays switched off. Draw-only still holds — this is list
+	 * hygiene, not a decision about what to show.
+	 */
 	void flashTile(WorldPoint point, Color color, String label, int expiresAtTick)
 	{
+		final int now = client.getTickCount();
+		flashes.removeIf(f -> now >= f.expiresAtTick);
+		while (flashes.size() >= MAX_FLASHES)
+		{
+			flashes.remove(0);
+		}
 		flashes.add(new TileFlash(point, color, label, expiresAtTick));
 	}
 

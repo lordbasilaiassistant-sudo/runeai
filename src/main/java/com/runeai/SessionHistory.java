@@ -246,14 +246,14 @@ class SessionHistory
 		}
 		try
 		{
-			FILE.getParentFile().mkdirs();
 			final List<Session> out = new ArrayList<>(past);
 			out.add(current);
 			while (out.size() > KEEP)
 			{
 				out.remove(0);
 			}
-			Files.write(FILE.toPath(), gson.toJson(out).getBytes(StandardCharsets.UTF_8));
+			// update() runs on the tick loop; the blocking part does not belong there
+			AsyncWriter.write(FILE, gson.toJson(out));
 		}
 		catch (Exception ex)
 		{

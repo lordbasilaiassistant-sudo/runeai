@@ -144,13 +144,40 @@ class FlipService
 		f2pOnly = f2p;
 	}
 
-	/** Flips the PLAYER can actually do: world-type filtered, budget filtered,
-	 *  ranked by achievable gp/hr with their capital. */
+	/**
+	 * How long a computed ranking is served from cache. The inputs only change
+	 * on a 60s scan or a context push, so a second is generous.
+	 */
+	private static final long TOP_CACHE_MS = 1_000;
+
+	private volatile List<Flip> cachedTop = List.of();
+	private volatile List<Flip> cachedFrom;
+	private volatile long cachedTopMs;
+	private volatile long cachedTopBudget = Long.MIN_VALUE;
+
+	/**
+	 * Flips the PLAYER can actually do: world-type filtered, budget filtered,
+	 * ranked by achievable gp/hr with their capital.
+	 *
+	 * <p><b>Memoized, and it has to be.</b> Two overlays call this from
+	 * {@code render()}, which runs every frame — so this filter-and-sort over
+	 * every quotable item in the game was running fifty-plus times a second on
+	 * the client thread, and each pass also re-stamped {@link #suggested} with a
+	 * fresh timestamp, which meant {@link #wasSuggested} could not expire for as
+	 * long as the GE window stayed open. The cache is invalidated by a new scan
+	 * (a different {@code allFlips}), by a change of budget, or by age.
+	 */
 	List<Flip> getTopFlips()
 	{
 		final long b = budget;
+		final List<Flip> source = allFlips;
+		final long now = System.currentTimeMillis();
+		if (source == cachedFrom && b == cachedTopBudget && now - cachedTopMs < TOP_CACHE_MS)
+		{
+			return cachedTop;
+		}
 		final List<Flip> out = new ArrayList<>();
-		for (Flip f : allFlips)
+		for (Flip f : source)
 		{
 			if (lanesOn && f.getLane() != FlipLane.QUICK)
 			{
@@ -182,13 +209,16 @@ class FlipService
 					* momentumFactor(f.getItemId())
 					* brainFactor(f.getItemId(), f.getBuyAt(), f.getNet())));
 		}
-		final List<Flip> top = out.subList(0, Math.min(8, out.size()));
-		final long now = System.currentTimeMillis();
+		final List<Flip> top = List.copyOf(out.subList(0, Math.min(8, out.size())));
 		for (Flip f : top)
 		{
 			suggested.put(f.getItemId(), new long[]{f.getBuyAt(), f.getSellAt(), now});
 			noteLane(f.getItemId(), f.getLane());
 		}
+		cachedTop = top;
+		cachedFrom = source;
+		cachedTopBudget = b;
+		cachedTopMs = now;
 		return top;
 	}
 
