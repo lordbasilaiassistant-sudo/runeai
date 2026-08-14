@@ -56,4 +56,14 @@ public class FlipLaneTest
 	{
 		assertEquals(2 * FlipLane.priorSideSecs(400), FlipLane.priorCycleSecs(400));
 	}
+
+	@Test
+	public void aQueueOrderNeverClaimsToFillInSeconds()
+	{
+		// however thick the book, a queue order waits behind it — the old 5s floor
+		// printed "~10s" cycles that never happened, which is the complaint "nothing
+		// is actually quick as it says" in one number
+		assertTrue(FlipLane.priorSideSecs(1_000_000) >= 30);
+		assertTrue(FlipLane.priorCycleSecs(1_000_000) >= 60);
+	}
 }

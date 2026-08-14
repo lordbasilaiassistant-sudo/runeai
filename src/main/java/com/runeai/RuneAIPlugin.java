@@ -147,6 +147,7 @@ public class RuneAIPlugin extends Plugin
 		int lastQty;      // for delta accounting: partial fills count immediately
 		long lastSpent;
 		long lastFillMs;  // stall detection: time since anything moved
+		long realized;    // profit booked across ALL this offer's partials, not just the last one
 		// the lane this offer was PLACED under. Frozen at placement: an overnight
 		// trap whose book heals by morning is still an overnight outcome.
 		FlipLane lane = FlipLane.QUICK;
@@ -162,7 +163,6 @@ public class RuneAIPlugin extends Plugin
 	private long lifetimeRealized; // persists in trader.json — all-time flip profit
 	private long lastFlipScanLogMs;
 	private long lastLoginMs;
-	private long lastSellProfit; // most recent realized sell profit, for item memory
 	private int sessionFills;    // offers completed THIS session — the scoreboard's count
 
 	// ---- TRADER: the flipping skill. profit gp -> xp on the real OSRS curve;
@@ -192,13 +192,6 @@ public class RuneAIPlugin extends Plugin
 		}
 		return lvl;
 	}
-
-	/** Max item price unlocked at a trader level — gp stack and skill grow together. */
-	static long traderMaxPrice(int level)
-	{
-		return (long) (500 * Math.pow(1.135, level));
-	}
-
 
 	private Gson prettyGson;
 	private RuneAIPanel panel;
@@ -298,7 +291,30 @@ public class RuneAIPlugin extends Plugin
 			.panel(panel)
 			.build();
 		sessionStartMs = System.currentTimeMillis();
-		sessionHistory.begin(sessionStartMs);
+		// a session survives logging out — waiting on offers IS part of the session.
+		// Resuming restores the counters AND moves sessionStartMs back to the real
+		// start, which is also what lets offers placed before the relaunch book
+		// into this session instead of being quarantined as carryover.
+		final SessionHistory.Session resumed = config.sessionResume()
+			? sessionHistory.resumeIfRecent(sessionStartMs, config.sessionGapMins() * 60_000L)
+			: null;
+		if (resumed != null)
+		{
+			sessionStartMs = resumed.getStartMs();
+			flipRealized = resumed.getFlipPnl();
+			sessionPnl = resumed.getLedgerPnl();
+			unitsBought = resumed.getUnitsBought();
+			unitsSold = resumed.getUnitsSold();
+			sessionFills = resumed.getFills();
+			// keep the ACTIVE-time clock: offline waiting must not dilute gp/h,
+			// so the first-offer mark is rebuilt from the accumulated active time
+			firstOfferMs = resumed.getActiveMs() > 0
+				? System.currentTimeMillis() - resumed.getActiveMs() : 0;
+		}
+		else
+		{
+			sessionHistory.begin(sessionStartMs);
+		}
 		voice.start(); // the queue is torn down in shutDown(); re-arm it
 		dangerModel.loadAsync(); // reads a file: never on the client thread
 		// the co-host is not started at all unless the player asked for it: with the
@@ -314,11 +330,15 @@ public class RuneAIPlugin extends Plugin
 		loadClog();
 		loadOfferState();
 		loadBookedOffers();
+		// a resumed session and the lifetime total are already known — show them
+		// now rather than after the first sell
+		panel.setFlipPnl(flipRealized, lifetimeRealized);
+		panel.setPnl(sessionPnl);
 		chatCommandManager.registerCommandAsync("!profit", (msg, txt) ->
 		{
 			msg.getMessageNode().setValue(String.format(
-				"<col=00b4ff>RuneAI</col> flips: %,d gp this session (%,d gp/h)",
-				flipRealized, lastFlipGpHr));
+				"<col=00b4ff>RuneAI</col> flips: %,d gp this session (%,d gp/h) · %,d gp all-time",
+				flipRealized, lastFlipGpHr, lifetimeRealized));
 			clientThread.invoke(() -> client.refreshChat());
 		});
 		chatCommandManager.registerCommandAsync("!lvl", (msg, txt) ->
@@ -377,7 +397,6 @@ public class RuneAIPlugin extends Plugin
 		firstOfferMs = 0;
 		lastFlipGpHr = 0;
 		lastFlipScanLogMs = 0;
-		lastSellProfit = 0;
 		bankValue = -1;
 		bondAnnounced = false;
 		lastHolding = null;
@@ -578,6 +597,7 @@ public class RuneAIPlugin extends Plugin
 					{
 						tr.lane = FlipLane.LONG;
 					}
+					tr.realized = saved.length > 7 ? saved[7] : 0;
 				}
 				offerTracks[slot] = tr;
 				saveOfferState();
@@ -586,6 +606,38 @@ public class RuneAIPlugin extends Plugin
 				{
 					firstOfferMs = nowMs;
 				}
+			}
+		}
+		else if (tr == null
+			&& (st == net.runelite.api.GrandExchangeOfferState.BOUGHT
+				|| st == net.runelite.api.GrandExchangeOfferState.SOLD
+				|| st == net.runelite.api.GrandExchangeOfferState.CANCELLED_BUY
+				|| st == net.runelite.api.GrandExchangeOfferState.CANCELLED_SELL))
+		{
+			// THE offline-fill fix. An offer that completed while the client was
+			// closed re-fires here in a terminal state on login, and the old code
+			// only resumed tracks for LIVE offers — so every gp earned while logged
+			// out was silently never booked: no basis update, no profit, no lifetime.
+			// That is the exact workflow of a flipper who logs out to wait on offers.
+			// The saved track has the pre-shutdown counters, so the delta below books
+			// exactly the units that filled offline and nothing that was already booked.
+			final long[] saved = savedOfferState.remove(String.valueOf(slot));
+			if (saved != null && saved[0] == o.getItemId() && saved[1] == o.getPrice())
+			{
+				tr = new OfferTrack();
+				tr.itemId = o.getItemId();
+				tr.price = o.getPrice();
+				tr.buying = buying;
+				tr.startMs = saved[4];
+				tr.lastQty = (int) saved[2];
+				tr.lastSpent = saved[3];
+				tr.lastFillMs = saved.length > 5 ? saved[5] : saved[4];
+				if (saved.length > 6 && saved[6] == FlipLane.LONG.ordinal())
+				{
+					tr.lane = FlipLane.LONG;
+				}
+				tr.realized = saved.length > 7 ? saved[7] : 0;
+				offerTracks[slot] = tr;
 			}
 		}
 
@@ -638,14 +690,18 @@ public class RuneAIPlugin extends Plugin
 					final long gross = (long) dQty * o.getPrice();
 					final long tax = (long) FlipService.geTax(o.getPrice()) * dQty;
 					final long profit = gross - tax - cost;
-					lastSellProfit = profit;
+					tr.realized += profit;
 					lifetimeRealized += profit;
+					// persist on EVERY sell: losses used to update lifetime in memory
+					// only, so a restart quietly un-lost them and the all-time number
+					// drifted optimistic forever
+					saveTrader();
 					if (!carryover)
 					{
 						flipRealized += profit;
 						unitsSold += dQty;
 					}
-					panel.setFlipPnl(flipRealized);
+					panel.setFlipPnl(flipRealized, lifetimeRealized);
 
 					// TRADE COLLECTION LOG: first profitable real buy->sell of an item
 					if (profit > 0 && realBasis && tradeClog.add(o.getItemId()))
@@ -654,7 +710,7 @@ public class RuneAIPlugin extends Plugin
 						final String iname = client.getItemDefinition(o.getItemId()).getName();
 						overlay.setAlert("NEW TRADE COLLECTED: " + iname + "!", client.getTickCount() + 10);
 						mascot.celebrate("New trade logged: " + iname + "!");
-						panel.addCollected(iname, itemManager.getImage(o.getItemId()));
+						panel.addCollected(iname, itemManager.getImage(o.getItemId()), profit);
 					}
 
 					// TRADER xp: positive profit only, real OSRS curve
@@ -663,6 +719,8 @@ public class RuneAIPlugin extends Plugin
 						traderXp += profit * 0.1; // 0.1 xp per gp: 99 = ~130M lifetime profit
 						saveTrader();
 						final int nl = traderLevelFor(traderXp);
+						// the level is a scoreboard, NOT a gate: it never hides a flip
+						// the player has the cash for
 						if (nl > traderLevel)
 						{
 							traderLevel = nl;
@@ -697,8 +755,10 @@ public class RuneAIPlugin extends Plugin
 				{
 					(buying ? buyFillSecs : sellFillSecs).add(fillSecs);
 				}
+				// the offer's WHOLE realized profit, not just the final partial's —
+				// a 1000-unit sell that filled in ten chunks used to book one chunk
 				itemMemory.recordFill(o.getItemId(), lane, offlineFill ? -1 : fillSecs,
-					buying ? 0 : lastSellProfit);
+					buying ? 0 : tr.realized);
 				if (tr.startMs >= sessionStartMs)
 				{
 					sessionFills++; // carryover offers belong to the session that placed them
@@ -815,9 +875,19 @@ public class RuneAIPlugin extends Plugin
 			}
 			final boolean membersW = client.getWorldType().contains(net.runelite.api.WorldType.MEMBERS);
 			flipService.setContext(coins, !membersW);
-			flipService.setTraderTier(traderLevel, traderMaxPrice(traderLevel));
 			flipService.setLaneConfig(config.flipLanes(), config.quickCycleSecs(),
-				(membersW ? 8 : 3) - Math.max(0, config.trapSlots()));
+				(membersW ? 8 : 3) - Math.max(0, config.trapSlots()), config.quickInstaOnly());
+			// open positions, deep-copied off the live map: the overlays use this to
+			// refuse to coach a sell below what was actually paid
+			final Map<Integer, long[]> basisSnap = new java.util.HashMap<>();
+			for (Map.Entry<Integer, long[]> e : flipBasis.entrySet())
+			{
+				if (e.getValue()[0] > 0)
+				{
+					basisSnap.put(e.getKey(), e.getValue().clone());
+				}
+			}
+			flipService.setBasisSnapshot(basisSnap);
 			// log the scan itself: call -> outcome training needs what was
 			// suggested and when, including the calls the player ignored
 			if (System.currentTimeMillis() - lastFlipScanLogMs > 5 * 60_000)
@@ -1524,7 +1594,7 @@ public class RuneAIPlugin extends Plugin
 				if (t != null)
 				{
 					out.put(String.valueOf(i), new long[]{t.itemId, t.price, t.lastQty,
-						t.lastSpent, t.startMs, t.lastFillMs, t.lane.ordinal()});
+						t.lastSpent, t.startMs, t.lastFillMs, t.lane.ordinal(), t.realized});
 				}
 			}
 			AsyncWriter.write(new File(DATA_DIR, "offer-state.json"), gson.toJson(out));
@@ -1580,7 +1650,10 @@ public class RuneAIPlugin extends Plugin
 		clogPopulated = true;
 		for (int id : tradeClog)
 		{
-			panel.addCollected(client.getItemDefinition(id).getName(), itemManager.getImage(id));
+			// the tooltip carries the receipt: what this item has paid all-time
+			final ItemMemory.Stats st = itemMemory.statsFor(id);
+			panel.addCollected(client.getItemDefinition(id).getName(), itemManager.getImage(id),
+				st != null ? st.getTotalProfit() : 0);
 		}
 	}
 

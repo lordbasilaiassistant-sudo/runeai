@@ -42,11 +42,11 @@ All source lives in `src/main/java/com/runeai/`.
 | `GameStateSnapshot.java` | Static one-shot capture of the whole client state into a `Map` for a JSON dump. **Client thread only.** |
 | `EventLog.java` | Append-only JSONL writer (`{"t":iso,"tick":n,"e":type,...}`), flushes every 50 lines. |
 | `AsyncWriter.java` | The one place the small JSON state files are written. Callers serialise on their own thread and hand over the bytes; one daemon thread does the blocking write, coalescing per path. **Every `save()` in this plugin runs on the client thread — none of them may call `Files.write` directly.** `shutDown()` calls `flush(2_000)`. Writes land on a `.tmp` sibling and are renamed into place, so a hard client kill can never leave a half-written ledger. |
-| `FlipService.java` | Live GE intelligence off the wiki prices API: books, tax-aware margins, trap detection, lane classification, the velocity ranker, and the anomaly watch. Suggestions only. |
+| `FlipService.java` | Live GE intelligence off the wiki prices API: books, tax-aware margins, insta-cross pricing (`instaNet`), the breakeven floor (`breakevenSell`), trap detection, lane classification, the velocity ranker, and the anomaly watch. Suggestions only. Affordability is gated on the coin stack ONLY — the trader level is a scoreboard, never a filter. |
 | `FlipLane.java` | The QUICK / LONG taxonomy — pure classifier plus the volume-based cycle-time prior. |
 | `ItemMemory.java` | Per-item bandit memory persisted to `~/.runelite/runeai/item-memory.json`, with per-lane ledgers, recovery-based cooldown expiry, and the per-item results ranking (`rank()`). |
 | `TradeHistory.java` | Reads the in-game GE Trade History interface (read-only) and diffs it against our booked offers. Parse and reconciliation are pure statics; the widget walk is client-thread. |
-| `SessionHistory.java` | Per-session result rows in `~/.runelite/runeai/session-history.json` plus the "beat your last session" comparison math. All ranking is `static` and argument-fed, so it tests without a client. |
+| `SessionHistory.java` | Per-session result rows in `~/.runelite/runeai/session-history.json` plus the "beat your last session" comparison math. A session RESUMES across client relaunches inside `sessionGapMins` (`resumeIfRecent`) — logging out to wait on offers is part of the session, not the end of one. All ranking is `static` and argument-fed, so it tests without a client. |
 | `FillTimeModel.java` | Dot-product inference for `train/flip_model.json`. Gated on that file's `verdict`. |
 | `GeBrain.java` | 7-16-1 tanh forward pass for `~/.runelite/runeai/ge-brain-hist.json`. Gated on `metrics.beats_baseline`. Moves ranking, never a coached price. |
 | `Champion.java` | Evolved policy genome from `~/.runelite/runeai/ge-champion.json`. Gated on `emergent_edge`; every getter falls back to the constant it replaced. |
@@ -181,6 +181,28 @@ RuneLite events ──> RuneAIPlugin (@Subscribe handlers)
   realised flip profit. gp/h is measured over ACTIVE time (first offer placed → now) with a one-minute
   floor, empty sessions are never written, and the live row is never part of its own comparison.
   Gated on `sessionScore()`.
+- **Session resume** — a relaunch inside `sessionGapMins` (default 8h) adopts the last session row and
+  restores the plugin's counters from it, and `sessionStartMs` moves back to the REAL start — which is
+  what lets offers placed before the relaunch book into this session instead of being quarantined as
+  carryover. The active-time clock is rebuilt as `now - activeMs`, so offline waiting never dilutes
+  gp/h. Gated on `sessionResume()`.
+- **Offline fills** — an offer that completes while the client is closed re-fires in a TERMINAL state
+  (`BOUGHT`/`SOLD`/`CANCELLED_*`) on login. The handler resumes the slot's track from
+  `offer-state.json` for terminal states too, so the delta accounting books exactly the units that
+  filled offline — basis, profit, lifetime, audit ledger. Before this fix every gp earned while logged
+  out was silently dropped, which is the exact workflow of a flipper who logs out to wait on offers.
+  Fill TIMING stays quarantined (`offlineFill`), only the money is booked.
+- **Insta pricing** — `FlipService.instaNet(low, high)`: buy at the instant-buy print, sell at the
+  instant-sell print, pay the tax. Positive means genuinely quick (both sides fill on placement); those
+  candidates carry `insta=true`, are quoted AT the insta prices, and outrank every queue flip. With
+  `quickInstaOnly()` on (default) they are the whole quick lane whenever any exist; queue flips are
+  always labeled with their honest wait estimate (`FlipLane.priorSideSecs` floors at 30s/side — a queue
+  order waits behind the book however thick it is).
+- **Breakeven floor** — `FlipService.breakevenSell(avgCost)` is the exact lowest sell that still clears
+  what was paid after tax; the plugin pushes the open `flipBasis` into `FlipService` each tick
+  (`setBasisSnapshot`) and BOTH GE overlays refuse to coach a sell below it. A book living under the
+  player's cost is said in loss words ("UNDER WATER · hold (−N/ea to exit)"), never disguised as a
+  routine reprice. Lifetime realized profit persists in `trader.json` on EVERY sell, losses included.
 - **Per-item results** — `ItemMemory.rank()` → `panel.setItemStats(...)`, top 6 by realised gp. An item
   never timed reports `untimed` rather than the bandit's 300s starting value. Gated on `itemStats()`.
 - **What item memory persists** — only `ItemMemory.traded()` rows (a fill, a stall, or realised gp).

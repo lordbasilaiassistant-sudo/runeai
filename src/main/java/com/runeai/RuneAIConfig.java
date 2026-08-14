@@ -212,6 +212,36 @@ public interface RuneAIConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "quickInstaOnly",
+		name = "Quick lane: insta prices only",
+		description = "Quick picks quote the instant-buy and instant-sell prices — both sides fill on placement — and only items still profitable after tax at those prices qualify. When none exist right now, the fastest queue flips are shown instead, labeled with their honest wait estimate"
+	)
+	default boolean quickInstaOnly()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "sessionResume",
+		name = "Resume session after relaunch",
+		description = "A session is a stretch of flipping, not a stretch of staying logged in. Logging out to wait on offers and coming back continues the same session — profits, counts and gp/h carry on. A new session only starts after the gap below"
+	)
+	default boolean sessionResume()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "sessionGapMins",
+		name = "New session after (min)",
+		description = "Minutes away from the client before the next launch counts as a NEW session instead of resuming the last one"
+	)
+	default int sessionGapMins()
+	{
+		return 480;
+	}
+
+	@ConfigItem(
 		keyName = "overnightMode",
 		name = "Heading offline",
 		description = "Flip this on before you log out: every free slot becomes a patience order instead of just the reserved trap slots, because a held slot costs nothing while you are away"

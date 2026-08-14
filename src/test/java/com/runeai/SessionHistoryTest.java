@@ -106,6 +106,20 @@ public class SessionHistoryTest
 	}
 
 	@Test
+	public void aShortGapResumesTheLastSessionAndALongGapDoesNot()
+	{
+		final SessionHistory.Session last = session(5_000, 600_000L);
+		last.setEndMs(1_000_000L);
+		final List<SessionHistory.Session> past = new ArrayList<>(List.of(last));
+		// logged out to wait on offers, came back inside the window: same session
+		assertEquals(last, SessionHistory.pickResumable(past, 1_000_000L + 60_000, 8 * 3_600_000L));
+		// away past the window: a fresh session
+		assertEquals(null, SessionHistory.pickResumable(past, 1_000_000L + 9 * 3_600_000L, 8 * 3_600_000L));
+		// nothing on record: nothing to resume
+		assertEquals(null, SessionHistory.pickResumable(new ArrayList<>(), 1_000_000L, 8 * 3_600_000L));
+	}
+
+	@Test
 	public void paddingTheHistoryWithEmptySessionsDoesNotInflateTheRank()
 	{
 		final List<SessionHistory.Session> padded = new ArrayList<>();

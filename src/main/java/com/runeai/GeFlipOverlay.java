@@ -235,10 +235,11 @@ public class GeFlipOverlay extends Overlay
 			{
 				final FlipService.Flip f = top.get(i);
 				g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 12));
-				// the cycle time IS the pitch in this lane — a 2gp margin that turns
-				// over every 40s beats a 50gp margin that sits for eight minutes
-				final String rest = String.format("%,d  +%d/ea  ~%ds",
-					f.getBuyAt(), f.getNet(), f.getCycleSecs());
+				// an insta pick fills on placement — the only "quick" that is true
+				// by construction. A queue pick says what it is and roughly how long.
+				final String rest = f.isInsta()
+					? String.format("%,d→%,d  +%d ⚡", f.getBuyAt(), f.getSellAt(), f.getNet())
+					: String.format("%,d  +%d/ea  q~%ds", f.getBuyAt(), f.getNet(), f.getCycleSecs());
 				final int restW = g.getFontMetrics().stringWidth(rest);
 				g.setColor(GOLD);
 				g.drawString(rest, W - 8 - restW, y);
@@ -323,8 +324,9 @@ public class GeFlipOverlay extends Overlay
 			g.drawString(f.getName(), 10, y);
 			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 13));
 			g.setColor(GOLD);
-			g.drawString(String.format("buy %,d · qty %,d · +%d each · sell %,d",
-				f.getBuyAt(), qty, f.getNet(), f.getSellAt()), 10, y + 16);
+			g.drawString(String.format("buy %,d · qty %,d · +%d each · sell %,d%s",
+				f.getBuyAt(), qty, f.getNet(), f.getSellAt(),
+				f.isInsta() ? "  ⚡ fills now" : "  · queue ~" + f.getCycleSecs() + "s"), 10, y + 16);
 			y += 40;
 		}
 		return new Dimension(W, h);
@@ -413,15 +415,23 @@ public class GeFlipOverlay extends Overlay
 		final int limit = flips.limitFor(itemId);
 		final long budget = flips.getBudget();
 
+		// the raw book decides whether crossing the spread pays — the insta line
+		final long[] book = flips.bookFor(itemId);
+		final long iNet = book != null ? FlipService.instaNet(book[0], book[1]) : -1;
+
+		// what THIS player paid, if they are still holding it — the loss guard
+		final long avg = flips.avgCost(itemId);
+		final long breakeven = avg >= 0 ? FlipService.breakevenSell(avg) : -1;
+
 		// GE varbit 4397: 0 = buy setup, 1 = sell setup — different advice entirely
 		final boolean selling = client.getVarbitValue(4397) == 1;
 		long qty;
 		long total;
+		long unsold = 0;
 		if (!selling)
 		{
 			// allocation guard: buying MORE of something you haven't sold through
 			// concentrates capital in an unproven exit — flag it loudly
-			long unsold = 0;
 			final ItemContainer inv2 = client.getItemContainer(InventoryID.INVENTORY);
 			if (inv2 != null)
 			{
@@ -441,13 +451,10 @@ public class GeFlipOverlay extends Overlay
 					unsold += of.getTotalQuantity() - of.getQuantitySold();
 				}
 			}
-			if (unsold > 0)
-			{
-				g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 13));
-				g.setColor(new Color(255, 100, 100));
-				g.drawString(String.format("⚠ %,d unsold already — sell through first", unsold), 10, 138);
-			}
 		}
+		// the price actually coached on the sell side: never below breakeven when
+		// the book still supports a profitable exit — "reprice" must not mean "lose"
+		final long coachedSell = selling && breakeven > 0 ? Math.max(sellAt, breakeven) : sellAt;
 		if (selling)
 		{
 			// selling: dump the full stack you hold at the undercut price
@@ -465,7 +472,7 @@ public class GeFlipOverlay extends Overlay
 				}
 			}
 			qty = Math.max(1, held);
-			total = (sellAt - FlipService.geTax((int) sellAt)) * qty;
+			total = (coachedSell - FlipService.geTax((int) coachedSell)) * qty;
 		}
 		else
 		{
@@ -479,7 +486,9 @@ public class GeFlipOverlay extends Overlay
 
 		g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 15));
 		g.setColor(Color.WHITE);
-		g.drawString(String.format("BUY at  %,d      SELL at  %,d", buyAt, sellAt), 10, 50);
+		g.drawString(selling
+			? String.format("SELL at  %,d", coachedSell)
+			: String.format("BUY at  %,d      SELL at  %,d", buyAt, sellAt), 10, 50);
 		g.setColor(net > 0 ? new Color(120, 220, 140) : new Color(255, 120, 100));
 		g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 13));
 		g.drawString(String.format("net %+,d each after tax", net), 10, 74);
@@ -491,6 +500,34 @@ public class GeFlipOverlay extends Overlay
 		g.drawString(selling
 			? String.format("sell ALL %,d  →  %,d gp after tax", qty, total)
 			: String.format("suggested qty %,d  →  total %+,d gp", qty, total), 10, 122);
+
+		// context line: the loss guard while selling, the insta shortcut while buying
+		g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 12));
+		if (selling && avg >= 0)
+		{
+			if (sellAt < breakeven)
+			{
+				g.setColor(new Color(255, 100, 100));
+				g.drawString(String.format("paid ~%,d — book price %,d LOSES %,d/ea · ask %,d to profit",
+					avg, sellAt, avg - (sellAt - FlipService.geTax((int) sellAt)), breakeven), 10, 141);
+			}
+			else
+			{
+				g.setColor(new Color(120, 220, 140));
+				g.drawString(String.format("paid ~%,d · breakeven %,d ✓", avg, breakeven), 10, 141);
+			}
+		}
+		else if (!selling && unsold > 0)
+		{
+			g.setColor(new Color(255, 100, 100));
+			g.drawString(String.format("⚠ %,d unsold already — sell through first", unsold), 10, 141);
+		}
+		else if (!selling && iNet > 0)
+		{
+			g.setColor(GOLD);
+			g.drawString(String.format("⚡ INSTA: buy %,d · sell %,d · +%d each — fills now",
+				book[1], book[0], iNet), 10, 141);
+		}
 		return new Dimension(W, h);
 	}
 

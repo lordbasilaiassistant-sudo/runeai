@@ -143,8 +143,18 @@ public class GeSlotStampOverlay extends Overlay
 			}
 			else
 			{
+				// THE FLOOR UNDER EVERY SELL SUGGESTION: what was actually paid.
+				// The repricer used to walk a stalled sell down toward the live
+				// book with no memory of the buy — "you waited to buy it, now sell
+				// it at a loss". A reprice below breakeven is not a reprice, it is
+				// a realized loss, and it gets said in those words or not at all.
+				final long avg = flips.avgCost(o.getItemId());
+				final long breakeven = avg >= 0 ? FlipService.breakevenSell(avg) : -1;
+				final long floor = Math.max(low, breakeven);
 				final long heldExtra = heldInInventory(o.getItemId());
-				final long stepDown = Math.max(o.getPrice() - spreadStep, low);
+				final long stepDown = Math.max(o.getPrice() - spreadStep, floor);
+				final long exitNowLoss = avg >= 0
+					? avg - (low - FlipService.geTax((int) low)) : 0;
 				if (heldExtra > 0)
 				{
 					// selling while holding more of the same item wastes the slot:
@@ -152,23 +162,43 @@ public class GeSlotStampOverlay extends Overlay
 					label = "ADD " + fmt(heldExtra) + " MORE · relist all";
 					c = MOVE;
 				}
+				else if (breakeven > 0 && o.getPrice() < breakeven)
+				{
+					// the player already typed a losing price — say the number
+					final long lossEa = avg - (o.getPrice() - FlipService.geTax(o.getPrice()));
+					label = "LISTED BELOW COST · −" + fmt(lossEa) + "/ea";
+					c = ABORT;
+				}
+				else if (breakeven > 0 && high < breakeven)
+				{
+					// the whole book is under what was paid: exiting is a LOSS
+					// decision, never a coached reprice
+					label = "UNDER WATER · hold (−" + fmt(Math.max(1, exitNowLoss)) + "/ea to exit)";
+					c = ABORT;
+				}
 				else if (o.getPrice() > high)
 				{
-					label = "CANCEL · relist " + fmt(Math.min(high - 1, stepDown));
+					label = "CANCEL · relist " + fmt(Math.max(Math.min(high - 1, stepDown), floor));
 					c = MOVE;
 				}
 				else if (isDead(i, o))
 				{
 					label = stepDown < o.getPrice()
 						? "DEAD " + placedMin(i) + "m · resell @ " + fmt(stepDown)
-						: "DEAD " + placedMin(i) + "m · at floor, hold or eat loss";
+							+ (stepDown == breakeven ? " (breakeven)" : "")
+						: breakeven > 0 && o.getPrice() <= breakeven
+							? "DEAD " + placedMin(i) + "m · at breakeven, hold"
+							: "DEAD " + placedMin(i) + "m · at floor, hold";
 					c = ABORT;
 				}
 				else if (isSlow(i, o))
 				{
 					label = stepDown < o.getPrice()
 						? "STALLED " + ageMin(i) + "m · resell @ " + fmt(stepDown)
-						: "STALLED " + ageMin(i) + "m · at floor";
+							+ (stepDown == breakeven ? " (breakeven)" : "")
+						: breakeven > 0 && o.getPrice() <= breakeven
+							? "STALLED " + ageMin(i) + "m · at breakeven, hold"
+							: "STALLED " + ageMin(i) + "m · at floor";
 					c = MOVE;
 				}
 				else

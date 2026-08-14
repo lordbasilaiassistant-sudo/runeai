@@ -40,7 +40,9 @@ enum FlipLane
 	static long priorSideSecs(long vol5m)
 	{
 		final double perUnit = 300.0 / Math.max(1L, vol5m);
-		return (long) Math.max(5, Math.min(1800, QUEUE_UNITS * perUnit));
+		// floor 30s/side: a queue order waits behind the whole book however thick
+		// it is — the old 5s floor quoted "~10s" cycles no queue order ever hits
+		return (long) Math.max(30, Math.min(1800, QUEUE_UNITS * perUnit));
 	}
 
 	/** A full cycle is both sides, so the prior is simply doubled. */

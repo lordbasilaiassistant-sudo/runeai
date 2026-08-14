@@ -323,12 +323,16 @@ public class RuneAIPanel extends PluginPanel
 		});
 	}
 
-	public void setFlipPnl(long pnl)
+	/** Session number in front, the all-time total right beside it — "profits from start to now" lives here. */
+	public void setFlipPnl(long pnl, long lifetime)
 	{
 		SwingUtilities.invokeLater(() ->
 		{
-			flipPnlValue.setText(String.format("%,d gp", pnl));
+			flipPnlValue.setText(String.format("%,d · all-time %s", pnl, compact(lifetime)));
 			flipPnlValue.setForeground(pnl > 0 ? OK_GREEN : pnl < 0 ? LOSS : Color.WHITE);
+			flipPnlValue.setToolTipText(String.format(
+				"<html>Realized flip profit: %,d gp this session<br>%,d gp all-time, across every session since install</html>",
+				pnl, lifetime));
 		});
 	}
 
@@ -347,9 +351,12 @@ public class RuneAIPanel extends PluginPanel
 				name.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 11));
 				name.setForeground(Color.WHITE);
 				name.setAlignmentX(LEFT_ALIGNMENT);
-				final JLabel line = new JLabel(String.format(
-					"buy %,d → sell %,d   +%,d (%.1f%%)  ~%ds",
-					f.getBuyAt(), f.getSellAt(), f.getNet(), f.getRoi(), f.getCycleSecs()));
+				// an insta pick fills on placement; a queue pick waits, and says so
+				final JLabel line = new JLabel(f.isInsta()
+					? String.format("buy %,d → sell %,d   +%,d (%.1f%%)  ⚡ fills now",
+						f.getBuyAt(), f.getSellAt(), f.getNet(), f.getRoi())
+					: String.format("buy %,d → sell %,d   +%,d (%.1f%%)  queue ~%ds",
+						f.getBuyAt(), f.getSellAt(), f.getNet(), f.getRoi(), f.getCycleSecs()));
 				line.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
 				line.setForeground(new Color(255, 200, 0));
 				line.setAlignmentX(LEFT_ALIGNMENT);
@@ -590,12 +597,13 @@ public class RuneAIPanel extends PluginPanel
 		});
 	}
 
-	public void addCollected(String name, net.runelite.client.util.AsyncBufferedImage img)
+	public void addCollected(String name, net.runelite.client.util.AsyncBufferedImage img, long profit)
 	{
 		SwingUtilities.invokeLater(() ->
 		{
 			final JLabel icon = new JLabel();
-			icon.setToolTipText(name);
+			icon.setToolTipText(profit != 0
+				? String.format("%s · %+,d gp all-time", name, profit) : name);
 			img.addTo(icon);
 			clogGrid.add(icon);
 			clogTitle.setText("Trade log · " + (++clogCount) + " items");

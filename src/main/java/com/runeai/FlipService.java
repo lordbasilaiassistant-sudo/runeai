@@ -69,24 +69,76 @@ class FlipService
 	private volatile String cachedFive;
 	private volatile long budget = -1;       // carried coins; -1 = unknown
 	private volatile boolean f2pOnly;
-	private volatile long traderMaxPrice = Long.MAX_VALUE;
-	private volatile int traderLevel = 1;
 	private volatile long quickCeilingSecs = FlipLane.DEFAULT_QUICK_CYCLE_SECS;
 	private volatile boolean lanesOn = true;
 	private volatile int quickSlots = 3;
+	private volatile boolean instaOnly = true;
+	/** The player's open buy basis: id -> {qty, totalCost}. Pushed from the plugin. */
+	private volatile Map<Integer, long[]> basis = Map.of();
 
-	void setTraderTier(int level, long maxPrice)
-	{
-		traderLevel = level;
-		traderMaxPrice = maxPrice;
-	}
+	/**
+	 * A full insta cycle: both sides fill on placement, the rest is walking to the
+	 * booth and relisting. This is the honest number the quick lane is graded on.
+	 */
+	static final long INSTA_CYCLE_SECS = 30;
 
 	/** Lane boundary and slot split from config; pushed in with the other context. */
-	void setLaneConfig(boolean enabled, long quickCycleSecs, int quickLaneSlots)
+	void setLaneConfig(boolean enabled, long quickCycleSecs, int quickLaneSlots, boolean quickInstaOnly)
 	{
+		if (instaOnly != quickInstaOnly)
+		{
+			cachedFrom = null; // the filter changed — a cached ranking is stale
+		}
 		lanesOn = enabled;
 		quickCeilingSecs = Math.max(30, quickCycleSecs);
 		quickSlots = Math.max(1, quickLaneSlots);
+		instaOnly = quickInstaOnly;
+	}
+
+	/** Open-position snapshot so coaching can refuse to sell below what was paid. */
+	void setBasisSnapshot(Map<Integer, long[]> b)
+	{
+		basis = b;
+	}
+
+	/** Average gp paid per unit still held of this item, or -1 with no open basis. */
+	long avgCost(int itemId)
+	{
+		final long[] b = basis.get(itemId);
+		return b == null || b[0] <= 0 ? -1 : b[1] / b[0];
+	}
+
+	/**
+	 * The lowest sell price that still returns more than what was paid, after tax.
+	 * The floor under every reprice suggestion: coaching a sell below this is
+	 * coaching a realized loss, which is a decision, never a "reprice".
+	 */
+	static long breakevenSell(long avgCost)
+	{
+		long p = avgCost < 49 ? avgCost + 1 : (long) Math.ceil((avgCost + 1) / 0.98);
+		if (geTax(p) >= 5_000_000)
+		{
+			p = avgCost + 5_000_001; // tax is capped up here; the 2% form overshoots
+		}
+		while (p - geTax(p) <= avgCost)
+		{
+			p++; // guard: the returned price must clear the cost
+		}
+		while (p - 1 - geTax(p - 1) > avgCost)
+		{
+			p--; // tighten: it is the FLOOR, not a padded number
+		}
+		return p;
+	}
+
+	/**
+	 * What crossing the spread nets: buy at the instant-buy print, sell at the
+	 * instant-sell print, pay the tax. Positive means the flip is genuinely quick —
+	 * both sides fill on placement instead of waiting in a queue.
+	 */
+	static long instaNet(long low, long high)
+	{
+		return low - geTax(low) - high;
 	}
 
 	@Value
@@ -103,6 +155,8 @@ class FlipService
 		boolean members;
 		long cycleSecs;
 		FlipLane lane;
+		/** True when buyAt/sellAt are insta prices — both sides fill on placement. */
+		boolean insta;
 	}
 
 	private final ItemMemory itemMemory;
@@ -177,6 +231,7 @@ class FlipService
 			return cachedTop;
 		}
 		final List<Flip> out = new ArrayList<>();
+		boolean anyInsta = false;
 		for (Flip f : source)
 		{
 			if (lanesOn && f.getLane() != FlipLane.QUICK)
@@ -191,11 +246,18 @@ class FlipService
 			{
 				continue;
 			}
-			if (f.getBuyAt() > traderMaxPrice)
-			{
-				continue; // above this trader level's tier — level up to unlock
-			}
+			// the ONLY affordability gate is the actual coin stack — a trader-level
+			// price tier used to hide flips the player could pay for, which made the
+			// level a tax on the bankroll instead of a scoreboard
+			anyInsta |= f.isInsta();
 			out.add(f);
+		}
+		// insta-only mode: when true insta margins exist they are the whole lane;
+		// with none on the board the queue flips stay visible (honestly labeled)
+		// rather than showing an empty box
+		if (instaOnly && anyInsta)
+		{
+			out.removeIf(f -> !f.isInsta());
 		}
 		if (b > 0)
 		{
@@ -203,11 +265,14 @@ class FlipService
 			// items float up, recent stalls sink, unknowns keep a little exploration
 			// optimism. A 2gp margin cycling every 40s beats a 50gp margin that sits
 			// for eight minutes, and ranking by margin is what made sells stall.
-			out.sort(Comparator.comparingDouble(f ->
-				-velocity(f, slotCapital(b))
-					* itemMemory.scoreMultiplier(f.getItemId())
-					* momentumFactor(f.getItemId())
-					* brainFactor(f.getItemId(), f.getBuyAt(), f.getNet())));
+			// insta margins outrank every queue flip: a price that fills on
+			// placement is the only kind the quick lane can honestly call quick
+			out.sort(Comparator.comparing(Flip::isInsta).reversed()
+				.thenComparing(Comparator.comparingDouble((Flip f) ->
+					-velocity(f, slotCapital(b))
+						* itemMemory.scoreMultiplier(f.getItemId())
+						* momentumFactor(f.getItemId())
+						* brainFactor(f.getItemId(), f.getBuyAt(), f.getNet()))));
 		}
 		final List<Flip> top = List.copyOf(out.subList(0, Math.min(8, out.size())));
 		for (Flip f : top)
@@ -758,6 +823,20 @@ class FlipService
 				{
 					continue;
 				}
+				// INSTA candidate first: crossing the spread — buy at the instant-buy
+				// print, sell at the instant-sell print — still profits after tax.
+				// Rare, and the only flip that is quick the way the word means it:
+				// both sides fill on placement instead of waiting in a queue.
+				final long iNet = instaNet(low, high);
+				final double iRoi = iNet / (double) high;
+				if (iNet > 0 && iRoi <= 0.30 && iRoi >= champion.roiFloorFor(INSTA_CYCLE_SECS))
+				{
+					final double iUnitsHr = Math.min(limits.get(id)[0] / 4.0, vol * 12 * champion.volShare());
+					flips.add(new Flip(id, name, high, low, (int) iNet,
+						iNet * 100.0 / high, (long) (iNet * iUnitsHr), iUnitsHr,
+						membersItem.getOrDefault(id, true), INSTA_CYCLE_SECS, FlipLane.QUICK, true));
+					continue;
+				}
 				// ROI over 30% on a liquid item = stale outlier price, not free money.
 				// The floor underneath is the champion's, converted from its hourly
 				// bar to THIS cycle so it stays a rate of return rather than an
@@ -770,7 +849,7 @@ class FlipService
 				final double unitsHr = Math.min(limits.get(id)[0] / 4.0, vol * 12 * champion.volShare());
 				flips.add(new Flip(id, name, buyAt, sellAt, net,
 					net * 100.0 / buyAt, (long) (net * unitsHr), unitsHr,
-					membersItem.getOrDefault(id, true), cyc, lane));
+					membersItem.getOrDefault(id, true), cyc, lane, false));
 			}
 			flips.sort(Comparator.comparingLong(f -> -f.gpHr));
 			allFlips = flips;

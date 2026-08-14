@@ -167,6 +167,43 @@ class SessionHistory
 	}
 
 	/**
+	 * Which finished row, if any, this launch is a CONTINUATION of. A session is a
+	 * stretch of flipping, not a stretch of being logged in — logging out to wait
+	 * on offers and coming back is the same session, and only a real gap ends one.
+	 * Pure and static so the boundary rule is testable without a clock or a disk.
+	 */
+	static Session pickResumable(List<Session> past, long nowMs, long maxGapMs)
+	{
+		if (past.isEmpty())
+		{
+			return null;
+		}
+		final Session last = past.get(past.size() - 1);
+		return nowMs - last.endMs <= maxGapMs ? last : null;
+	}
+
+	/**
+	 * Adopt the most recent row as this run's live session if the gap since its
+	 * last update is inside {@code maxGapMs}. Returns the adopted row (so the
+	 * plugin can restore its counters from it) or null for a fresh session —
+	 * in which case the caller still owns calling {@link #begin}.
+	 */
+	Session resumeIfRecent(long nowMs, long maxGapMs)
+	{
+		final Session r = pickResumable(past, nowMs, maxGapMs);
+		if (r == null)
+		{
+			return null;
+		}
+		past.remove(past.size() - 1);
+		current = r;
+		current.endMs = nowMs;
+		log.info("session resumed: started {}m ago, {} gp so far",
+			(nowMs - r.startMs) / 60_000, r.flipPnl);
+		return r;
+	}
+
+	/**
 	 * Refresh the live row and hand back the scoreboard. Cheap enough to call on
 	 * the tick loop; the disk write behind it is throttled to once a minute so a
 	 * client that dies without a clean shutdown still loses at most a minute.
