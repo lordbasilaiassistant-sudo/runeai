@@ -244,6 +244,32 @@ public class OfferLifecycleHarnessTest
 		assertEquals(5L, get(run2, "unitsSold"));
 	}
 
+	// ================= scenario D: the GE improves the fill price =================
+
+	@Test
+	public void priceImprovementBooksTheCoinsThatActuallyMoved() throws Exception
+	{
+		// measured live 2026-08-14: asked 1,178, buyers paid 1,570 — the GE fills
+		// a sell at the buyer's standing price, `spent` carries the real coins
+		// (pre-tax), and the game taxes the ACTUAL unit price, not the ask
+		final Gson gson = new Gson();
+		final ItemMemory memory = new ItemMemory(gson);
+		final RuneAIPlugin p = newPlugin(gson, memory, service(gson, memory),
+			System.currentTimeMillis() - 1_000);
+
+		fire(p, 0, offer(261, 100, 0, 0, GrandExchangeOfferState.BUYING, 10));
+		fire(p, 0, offer(261, 100, 10, 1_000, GrandExchangeOfferState.BOUGHT, 10));
+		// ask 120, but the buyers' offers were at 150: spent = 1,500 for 10
+		fire(p, 0, offer(261, 120, 0, 0, GrandExchangeOfferState.SELLING, 10));
+		fire(p, 0, offer(261, 120, 10, 1_500, GrandExchangeOfferState.SOLD, 10));
+
+		// gross 1,500 − tax 30 (2% of the ACTUAL 150/ea, x10) − cost 1,000 = 470.
+		// The old ask-based math would have said 120x10 − 20 − 1,000 = 180 and
+		// silently donated the 290 gp improvement to nobody.
+		assertEquals(470L, get(p, "flipRealized"));
+		assertEquals(470L, get(p, "lifetimeRealized"));
+	}
+
 	// ================= scenario C: a loss persists to lifetime =================
 
 	@Test

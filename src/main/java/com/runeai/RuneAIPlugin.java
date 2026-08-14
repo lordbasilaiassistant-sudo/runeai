@@ -860,10 +860,16 @@ public class RuneAIPlugin extends Plugin
 						// buy price so profit = the spread, never the full proceeds
 						cost = syntheticCost(o.getItemId(), o.getPrice(), dQty);
 					}
-					// sell − buy − tax, computed explicitly: 2% per item (floored),
-					// only on taxable items — never trust the API field's semantics
-					final long gross = (long) dQty * o.getPrice();
-					final long tax = (long) FlipService.geTax(o.getPrice()) * dQty;
+					// PRICE IMPROVEMENT IS REAL MONEY. The GE fills a sell at the
+					// BUYER's standing price when it is higher than the ask, and the
+					// audit caught +235,885 gp booked away by using the typed price
+					// (asked 1,178, buyers paid 1,570 — measured 2026-08-14). The
+					// coins that actually moved are in the spent delta, PRE-tax at
+					// the improved price, and the game taxes the ACTUAL unit price —
+					// so book from dCoins and tax what really traded.
+					final long gross = dCoins > 0 ? dCoins : (long) dQty * o.getPrice();
+					final long unitActual = gross / dQty;
+					final long tax = FlipService.geTax(unitActual) * dQty;
 					final long profit = gross - tax - cost;
 					// the whole profit computation, inputs and all, one row per sell
 					// delta — "where did this number come from" answered from the log
@@ -871,6 +877,7 @@ public class RuneAIPlugin extends Plugin
 					sb.put("item", o.getItemId());
 					sb.put("qty", dQty);
 					sb.put("price", o.getPrice());
+					sb.put("unitActual", unitActual); // ≠ price when the GE improved the fill
 					sb.put("gross", gross);
 					sb.put("tax", tax);
 					sb.put("cost", cost);
@@ -954,10 +961,14 @@ public class RuneAIPlugin extends Plugin
 					sessionFills++; // carryover offers belong to the session that placed them
 				}
 				// one row per finished offer, matching how the game's own history
-				// reports it. Only offers we watched from placement are booked: an
-				// offer that completed while the client was closed re-fires as
-				// BOUGHT on login, and booking that would invent a second trade
-				bookOffer(o.getItemId(), o.getQuantitySold(), o.getPrice(), buying);
+				// reports it — at the REALIZED unit price (spent/qty), because the
+				// history shows what actually traded, improvements included. Only
+				// offers we watched from placement are booked: an offer that
+				// completed while the client was closed re-fires as BOUGHT on
+				// login, and booking that would invent a second trade
+				bookOffer(o.getItemId(), o.getQuantitySold(),
+					o.getQuantitySold() > 0 ? (int) (o.getSpent() / o.getQuantitySold()) : o.getPrice(),
+					buying);
 			}
 			if (sug)
 			{
@@ -985,8 +996,11 @@ public class RuneAIPlugin extends Plugin
 			if (tr != null && tr.itemId == o.getItemId())
 			{
 				// a pulled offer that filled partly is still a trade the game
-				// recorded, so the audit has to know about it
-				bookOffer(o.getItemId(), o.getQuantitySold(), o.getPrice(), buying);
+				// recorded, so the audit has to know about it — realized price,
+				// same as completed offers
+				bookOffer(o.getItemId(), o.getQuantitySold(),
+					o.getQuantitySold() > 0 ? (int) (o.getSpent() / o.getQuantitySold()) : o.getPrice(),
+					buying);
 			}
 			// a cancel is a CENSORED fill-time observation: "this long was not
 			// enough" — the survival model's other half, never thrown away again
