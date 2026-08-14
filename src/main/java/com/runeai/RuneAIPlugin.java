@@ -343,10 +343,13 @@ public class RuneAIPlugin extends Plugin
 			// so the first-offer mark is rebuilt from the accumulated active time
 			firstOfferMs = resumed.getActiveMs() > 0
 				? System.currentTimeMillis() - resumed.getActiveMs() : 0;
+			resumeNote = String.format("session RESUMED (%+,d gp, started %dm ago)",
+				resumed.getFlipPnl(), (System.currentTimeMillis() - resumed.getStartMs()) / 60_000);
 		}
 		else
 		{
 			sessionHistory.begin(sessionStartMs);
+			resumeNote = "new session";
 		}
 		voice.start(); // the queue is torn down in shutDown(); re-arm it
 		dangerModel.loadAsync(); // reads a file: never on the client thread
@@ -383,6 +386,12 @@ public class RuneAIPlugin extends Plugin
 			msg.getMessageNode().setValue(String.format(
 				"<col=00b4ff>RuneAI</col> flips: %,d gp this session (%,d gp/h) · %,d gp all-time",
 				flipRealized, lastFlipGpHr, lifetimeRealized));
+			clientThread.invoke(() -> client.refreshChat());
+		});
+		chatCommandManager.registerCommandAsync("!track", (msg, txt) ->
+		{
+			msg.getMessageNode().setValue(
+				"<col=00b4ff>RuneAI tracked</col> " + trackSummary());
 			clientThread.invoke(() -> client.refreshChat());
 		});
 		chatCommandManager.registerCommandAsync("!lvl", (msg, txt) ->
@@ -455,6 +464,16 @@ public class RuneAIPlugin extends Plugin
 		wasUnderAttack = false;
 		petTile = null;
 		petPrevTile = null;
+		synchronized (trackCounts)
+		{
+			trackCounts.clear();
+		}
+		lastVerdicts = new java.util.HashMap<>();
+		lastCoachSeen = null;
+		loginFillUnits = 0;
+		loginFillProfit = 0;
+		loginReportTick = -1;
+		resumeNote = "new session";
 	}
 
 	@Override
@@ -462,6 +481,7 @@ public class RuneAIPlugin extends Plugin
 	{
 		chatCommandManager.unregisterCommand("!profit");
 		chatCommandManager.unregisterCommand("!lvl");
+		chatCommandManager.unregisterCommand("!track");
 		streamer.stop();
 		voice.shutdown();
 		sessionHistory.finish();
@@ -520,6 +540,58 @@ public class RuneAIPlugin extends Plugin
 		}
 		feedStreamer(type, data);
 	}
+
+	// ================= the tracking layer =================
+
+	/**
+	 * Session counters per tracked signal, in arrival order. The cheap half of
+	 * "track everything": every {@link #track} call is one event-log row (full
+	 * detail, greppable forever) plus one counter bump readable in-game via
+	 * {@code !track}. Adding a new tracked signal anywhere in the plugin is ONE
+	 * line: {@code track("mySignal", d)}.
+	 */
+	private final Map<String, long[]> trackCounts = new LinkedHashMap<>();
+
+	private void track(String signal, Map<String, Object> data)
+	{
+		emit(signal, data);
+		synchronized (trackCounts)
+		{
+			trackCounts.computeIfAbsent(signal, k -> new long[1])[0]++;
+		}
+	}
+
+	private String trackSummary()
+	{
+		synchronized (trackCounts)
+		{
+			if (trackCounts.isEmpty())
+			{
+				return "no tracked signals yet this session";
+			}
+			final StringBuilder sb = new StringBuilder();
+			for (Map.Entry<String, long[]> e : trackCounts.entrySet())
+			{
+				if (sb.length() > 0)
+				{
+					sb.append(" · ");
+				}
+				sb.append(e.getKey()).append(" ").append(e.getValue()[0]);
+			}
+			return sb.toString();
+		}
+	}
+
+	// ---- post-login reconciliation: the proof shown IN GAME, not just in files ----
+	private long loginFillUnits;
+	private long loginFillProfit;
+	private int loginReportTick = -1;
+	private String resumeNote = "new session";
+
+	// ---- what the overlays actually SHOWED, change-driven: "it told me to sell
+	// at a loss" becomes a greppable row instead of a screenshot ----
+	private Map<Integer, String> lastVerdicts = new java.util.HashMap<>();
+	private String lastCoachSeen;
 
 	private Map<String, Object> m()
 	{
@@ -582,6 +654,11 @@ public class RuneAIPlugin extends Plugin
 		{
 			greeted = false;
 			lastLoginMs = System.currentTimeMillis();
+			// the reconciliation window: GE slots re-fire their states over the
+			// next few ticks; once they have, say out loud what was booked
+			loginFillUnits = 0;
+			loginFillProfit = 0;
+			loginReportTick = client.getTickCount() + 16;
 		}
 		else if (state == GameState.LOGIN_SCREEN)
 		{
@@ -611,6 +688,12 @@ public class RuneAIPlugin extends Plugin
 			|| st == net.runelite.api.GrandExchangeOfferState.BOUGHT
 			|| st == net.runelite.api.GrandExchangeOfferState.CANCELLED_BUY;
 		final long nowMs = System.currentTimeMillis();
+		// fills arriving in the first seconds after login happened OFFLINE at an
+		// unknown time — book the money, quarantine the timing. Computed up here
+		// because the delta accounting below needs it for the login report.
+		final boolean offlineFill = nowMs - lastLoginMs < 15_000;
+		// how this event's track came to exist — pure diagnostics, logged per event
+		String resumedFrom = null;
 
 		// lifecycle: new offer starts the clock, completion/cancel reads it
 		OfferTrack tr = offerTracks[slot];
@@ -658,6 +741,7 @@ public class RuneAIPlugin extends Plugin
 					}
 					tr.realized = saved.length > 7 ? saved[7] : 0;
 					restoreBook(tr, saved);
+					resumedFrom = "live";
 				}
 				offerTracks[slot] = tr;
 				saveOfferState();
@@ -698,7 +782,21 @@ public class RuneAIPlugin extends Plugin
 				}
 				tr.realized = saved.length > 7 ? saved[7] : 0;
 				restoreBook(tr, saved);
+				resumedFrom = "terminal";
 				offerTracks[slot] = tr;
+			}
+			else
+			{
+				// a terminal state with NO saved track: either the offer predates
+				// RuneAI or the state file was lost. Say so — this silence used to
+				// be exactly where offline money vanished.
+				final Map<String, Object> d = m();
+				d.put("slot", slot);
+				d.put("item", o.getItemId());
+				d.put("state", st.name());
+				d.put("price", o.getPrice());
+				d.put("qtySold", o.getQuantitySold());
+				track("unbookableTerminal", d);
 			}
 		}
 
@@ -714,15 +812,26 @@ public class RuneAIPlugin extends Plugin
 				// carryover = offer placed before this session: books to LIFETIME,
 				// never distorts this session's P&L or gp/h
 				final boolean carryover = tr.startMs < sessionStartMs;
+				if (offlineFill)
+				{
+					loginFillUnits += dQty; // the login report's receipt
+				}
 				if (buying)
 				{
 					flipBasis.merge(o.getItemId(), new long[]{dQty, dCoins},
 						(a, b) -> new long[]{a[0] + b[0], a[1] + b[1]});
 					// the 4h buy-limit ledger counts EVERY filled unit, carryover or
 					// not — the game's window doesn't care which session bought them
-					buyWindow.computeIfAbsent(o.getItemId(), k -> new java.util.ArrayDeque<>())
-						.addLast(new long[]{nowMs, dQty});
+					final java.util.ArrayDeque<long[]> win =
+						buyWindow.computeIfAbsent(o.getItemId(), k -> new java.util.ArrayDeque<>());
+					win.addLast(new long[]{nowMs, dQty});
 					saveBuyWindow();
+					final Map<String, Object> bl = m();
+					bl.put("item", o.getItemId());
+					bl.put("bought", dQty);
+					bl.put("usedInWindow", usedInWindow(win, nowMs));
+					bl.put("limit", flipService.limitFor(o.getItemId()));
+					track("buyLimit", bl);
 					if (!carryover)
 					{
 						unitsBought += dQty;
@@ -756,6 +865,24 @@ public class RuneAIPlugin extends Plugin
 					final long gross = (long) dQty * o.getPrice();
 					final long tax = (long) FlipService.geTax(o.getPrice()) * dQty;
 					final long profit = gross - tax - cost;
+					// the whole profit computation, inputs and all, one row per sell
+					// delta — "where did this number come from" answered from the log
+					final Map<String, Object> sb = m();
+					sb.put("item", o.getItemId());
+					sb.put("qty", dQty);
+					sb.put("price", o.getPrice());
+					sb.put("gross", gross);
+					sb.put("tax", tax);
+					sb.put("cost", cost);
+					sb.put("costReal", realBasis);
+					sb.put("profit", profit);
+					sb.put("carryover", carryover);
+					sb.put("offline", offlineFill);
+					track("sellBooked", sb);
+					if (offlineFill)
+					{
+						loginFillProfit += profit;
+					}
 					tr.realized += profit;
 					lifetimeRealized += profit;
 					// persist on EVERY sell: losses used to update lifetime in memory
@@ -803,9 +930,6 @@ public class RuneAIPlugin extends Plugin
 			}
 		}
 
-		// fills arriving in the first seconds after login happened OFFLINE at an
-		// unknown time — book the money, quarantine the timing
-		final boolean offlineFill = nowMs - lastLoginMs < 15_000;
 		Long fillSecs = null;
 		final FlipLane lane = tr != null ? tr.lane : flipService.laneFor(o.getItemId());
 		final boolean sug = flipService.wasSuggested(o.getItemId(), o.getPrice(), buying);
@@ -882,6 +1006,14 @@ public class RuneAIPlugin extends Plugin
 		d.put("suggested", sug);
 		d.put("offline", offlineFill);
 		d.put("lane", lane.name());
+		if (resumedFrom != null)
+		{
+			d.put("resumed", resumedFrom); // which restart path revived the track
+		}
+		if (tr != null)
+		{
+			d.put("carryover", tr.startMs < sessionStartMs);
+		}
 		// both accounting views logged so the real coin stack can arbitrate
 		d.put("taxCalc", (long) FlipService.geTax(o.getPrice()) * o.getQuantitySold());
 		if (fillSecs != null)
@@ -926,6 +1058,36 @@ public class RuneAIPlugin extends Plugin
 			lastTransferUiTick = client.getTickCount();
 		}
 		readTradeHistoryIfDue();
+
+		// POST-LOGIN RECONCILIATION REPORT: after the GE slots have re-fired,
+		// say in chat exactly what was just booked — the receipt that used to
+		// exist only in files, shown where the player is looking
+		if (loginReportTick > 0 && client.getTickCount() >= loginReportTick)
+		{
+			loginReportTick = -1;
+			int live = 0;
+			for (OfferTrack t : offerTracks)
+			{
+				if (t != null)
+				{
+					live++;
+				}
+			}
+			final Map<String, Object> lr = m();
+			lr.put("resume", resumeNote);
+			lr.put("offlineUnits", loginFillUnits);
+			lr.put("offlineProfit", loginFillProfit);
+			lr.put("liveOffers", live);
+			lr.put("sessionPnl", flipRealized);
+			lr.put("lifetime", lifetimeRealized);
+			track("loginReport", lr);
+			client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", String.format(
+				"<col=00b4ff>RuneAI</col> reconciled — %s · offline fills %,d unit(s)%s · %d offer(s) live · session %+,d gp · all-time %+,d gp",
+				resumeNote, loginFillUnits,
+				loginFillProfit != 0 ? String.format(" (%+,d gp on sells)", loginFillProfit) : "",
+				live, flipRealized, lifetimeRealized), null);
+			resumeNote = "session continuing";
+		}
 
 		flipService.maybeRefresh();
 		if (client.getTickCount() % 10 == 0)
@@ -1076,6 +1238,29 @@ public class RuneAIPlugin extends Plugin
 				firstOfferMs > 0 ? (System.currentTimeMillis() - firstOfferMs) / 60_000 : 0);
 			panel.setLanes(itemMemory.laneTotals(FlipLane.QUICK),
 				itemMemory.laneTotals(FlipLane.LONG));
+
+			// advice shown on screen goes into the record the moment it CHANGES —
+			// render() itself must never log (it runs every frame)
+			final Map<Integer, String> verds = geSlotStampOverlay.verdictSnapshot();
+			for (Map.Entry<Integer, String> e : verds.entrySet())
+			{
+				if (!e.getValue().equals(lastVerdicts.get(e.getKey())))
+				{
+					final Map<String, Object> vd = m();
+					vd.put("slot", e.getKey());
+					vd.put("verdict", e.getValue());
+					track("stampVerdict", vd);
+				}
+			}
+			lastVerdicts = verds;
+			final String coachLine = geFlipOverlay.lastCoach();
+			if (coachLine != null && !coachLine.equals(lastCoachSeen))
+			{
+				lastCoachSeen = coachLine;
+				final Map<String, Object> cd = m();
+				cd.put("line", coachLine);
+				track("coach", cd);
+			}
 
 			// the co-host follows the toggle at runtime, not only at startup
 			final boolean wantStreamer = config.streamerMode();

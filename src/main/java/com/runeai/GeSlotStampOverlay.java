@@ -38,6 +38,19 @@ public class GeSlotStampOverlay extends Overlay
 	private volatile long[] offerStarts = new long[8];   // last fill activity
 	private volatile long[] offerPlaced = new long[8];   // wall-clock placement (incl. offline)
 
+	/**
+	 * The last verdict drawn per slot, exactly as shown. The plugin polls this
+	 * from the tick loop and logs CHANGES — render() runs every frame and must
+	 * never log, but what the player was told is data.
+	 */
+	private final java.util.Map<Integer, String> verdicts =
+		new java.util.concurrent.ConcurrentHashMap<>();
+
+	java.util.Map<Integer, String> verdictSnapshot()
+	{
+		return new java.util.HashMap<>(verdicts);
+	}
+
 	void setOfferStarts(long[] lastActivity, long[] placed)
 	{
 		offerStarts = lastActivity;
@@ -76,6 +89,7 @@ public class GeSlotStampOverlay extends Overlay
 			final GrandExchangeOffer o = offers[i];
 			if (o == null || o.getItemId() <= 0 || o.getState() == GrandExchangeOfferState.EMPTY)
 			{
+				verdicts.remove(i); // an emptied slot must not keep its last verdict
 				continue;
 			}
 			final Widget slot = client.getWidget(465, 7 + i);
@@ -208,6 +222,9 @@ public class GeSlotStampOverlay extends Overlay
 					c = KEEP;
 				}
 			}
+
+			verdicts.put(i, (buying ? "BUY " : "SELL ") + o.getItemId() + " @" + o.getPrice()
+				+ " → " + l1 + (l2 != null ? " · " + l2 : ""));
 
 			final Rectangle b = slot.getBounds();
 			if (b == null)

@@ -75,6 +75,18 @@ public class GeFlipOverlay extends Overlay
 		traderPct = pct;
 	}
 
+	/**
+	 * The last offer-coach advice shown, one line, exactly as the player read
+	 * it. Polled from the tick loop and logged on change — the audit trail for
+	 * every "it told me to…" question.
+	 */
+	private volatile String lastCoach;
+
+	String lastCoach()
+	{
+		return lastCoach;
+	}
+
 	private volatile long lifetime;
 	private volatile java.util.List<String> pendingSells = java.util.List.of();
 	private volatile java.util.List<TrapBoard.Pick> traps = java.util.List.of();
@@ -370,6 +382,7 @@ public class GeFlipOverlay extends Overlay
 		final long[] q = flips.quoteFor(itemId);
 		if (q == null)
 		{
+			lastCoach = "item " + itemId + ": NO DATA";
 			line(g, x, y + 18, w, "no live data for this item", Color.LIGHT_GRAY, 12, false);
 			return;
 		}
@@ -382,6 +395,7 @@ public class GeFlipOverlay extends Overlay
 
 		if (config.trapGuard() && flips.isTrap(itemId))
 		{
+			lastCoach = "item " + itemId + ": THIN BOOK — patience only";
 			line(g, x, y + 17, w, "THIN BOOK — no real spread", TRAP, 14, true);
 			if (book != null)
 			{
@@ -410,6 +424,7 @@ public class GeFlipOverlay extends Overlay
 		if (remaining <= 0)
 		{
 			// the game enforces this silently — an offer past the limit just sits
+			lastCoach = "item " + itemId + ": BUY LIMIT USED";
 			line(g, x, y + 17, w, "BUY LIMIT USED — 4h window is spent", LOSS, 14, true);
 			line(g, x, y + 34, w, String.format("limit %,d · every unit bought in the last 4h counts", limit),
 				Color.LIGHT_GRAY, 12, false);
@@ -418,6 +433,7 @@ public class GeFlipOverlay extends Overlay
 		else if (iNet > 0)
 		{
 			// the genuinely quick play: cross the spread, both sides fill now
+			lastCoach = String.format("item %d: INSTA buy %,d sell %,d (+%d ea)", itemId, book[1], book[0], iNet);
 			line(g, x, y + 17, w, String.format("⚡ BUY at %,d · SELL at %,d — both fill now", book[1], book[0]), GOLD, 14, true);
 			long qty = Math.max(1, Math.min(Math.min(limit, remaining), volHr / 10));
 			if (budget > 0)
@@ -430,6 +446,7 @@ public class GeFlipOverlay extends Overlay
 		}
 		else if (net > 0)
 		{
+			lastCoach = String.format("item %d: QUEUE buy %,d sell %,d (+%d ea)", itemId, buyAt, sellAt, net);
 			line(g, x, y + 17, w, String.format("BUY at %,d · SELL at %,d  (queue prices)", buyAt, sellAt), Color.WHITE, 14, true);
 			long qty = Math.max(1, Math.min(Math.min(limit, remaining), volHr / 10));
 			if (budget > 0)
@@ -444,6 +461,7 @@ public class GeFlipOverlay extends Overlay
 		{
 			// NOTHING here makes money right now — say that, suggest nothing
 			final long bestNet = book != null ? Math.max(net, iNet) : net;
+			lastCoach = String.format("item %d: NO MARGIN (best %d ea)", itemId, bestNet);
 			line(g, x, y + 17, w, "NO MARGIN — this item pays nothing right now", LOSS, 14, true);
 			line(g, x, y + 34, w, String.format("book %,d / %,d · after tax you LOSE %,d each", buyAt, sellAt, Math.max(1, -bestNet)),
 				Color.LIGHT_GRAY, 12, false);
@@ -461,6 +479,12 @@ public class GeFlipOverlay extends Overlay
 		final long breakeven = avg >= 0 ? FlipService.breakevenSell(avg) : -1;
 		final long held = Math.max(1, heldOf(itemId));
 		final long coached = breakeven > 0 ? Math.max(sellAt, breakeven) : sellAt;
+		lastCoach = avg < 0
+			? String.format("item %d: SELL @ %,d (no basis)", itemId, coached)
+			: sellAt < breakeven
+				? String.format("item %d: SELL under cost — book %,d < breakeven %,d, coached %,d",
+					itemId, sellAt, breakeven, coached)
+				: String.format("item %d: SELL @ %,d (breakeven %,d ok)", itemId, coached, breakeven);
 		line(g, x, y + 17, w, String.format("SELL at %,d", coached), Color.WHITE, 14, true);
 		if (avg >= 0)
 		{
