@@ -306,7 +306,7 @@ public class GeFlipOverlay extends Overlay
 		for (int i = 0; i < n; i++)
 		{
 			final FlipService.Flip f = top.get(i);
-			long qty = Math.max(1, Math.min(flips.limitFor(f.getItemId()),
+			long qty = Math.max(1, Math.min(flips.remainingLimit(f.getItemId()),
 				(long) (f.getUnitsHr())));
 			final long budget = flips.getBudget();
 			if (budget > 0)
@@ -403,29 +403,41 @@ public class GeFlipOverlay extends Overlay
 
 		// -------- buy setup --------
 		long unsold = heldOf(itemId) + onSellOffers(itemId);
-		if (iNet > 0)
+		final long remaining = flips.remainingLimit(itemId);
+		final double ofi = flips.ofi(itemId);
+		final String flowNote = ofi != 0
+			? String.format(" · buyers %d%%", Math.round(50 + 50 * ofi)) : "";
+		if (remaining <= 0)
+		{
+			// the game enforces this silently — an offer past the limit just sits
+			line(g, x, y + 17, w, "BUY LIMIT USED — 4h window is spent", LOSS, 14, true);
+			line(g, x, y + 34, w, String.format("limit %,d · every unit bought in the last 4h counts", limit),
+				Color.LIGHT_GRAY, 12, false);
+			line(g, x, y + 51, w, "an offer placed now will sit — pick another item", GOLD, 13, true);
+		}
+		else if (iNet > 0)
 		{
 			// the genuinely quick play: cross the spread, both sides fill now
 			line(g, x, y + 17, w, String.format("⚡ BUY at %,d · SELL at %,d — both fill now", book[1], book[0]), GOLD, 14, true);
-			long qty = Math.max(1, Math.min(limit, volHr / 10));
+			long qty = Math.max(1, Math.min(Math.min(limit, remaining), volHr / 10));
 			if (budget > 0)
 			{
 				qty = Math.min(qty, Math.max(1, budget / Math.max(1, book[1])));
 			}
-			line(g, x, y + 34, w, String.format("+%d each after tax · ~%,d traded/hr · limit %,d", iNet, volHr, limit),
-				GAIN, 12, false);
+			line(g, x, y + 34, w, String.format("+%d each after tax · ~%,d traded/hr · limit left %,d%s",
+				iNet, volHr, remaining, flowNote), GAIN, 12, false);
 			line(g, x, y + 51, w, String.format("qty %,d → +%,d gp", qty, iNet * qty), GAIN, 13, true);
 		}
 		else if (net > 0)
 		{
 			line(g, x, y + 17, w, String.format("BUY at %,d · SELL at %,d  (queue prices)", buyAt, sellAt), Color.WHITE, 14, true);
-			long qty = Math.max(1, Math.min(limit, volHr / 10));
+			long qty = Math.max(1, Math.min(Math.min(limit, remaining), volHr / 10));
 			if (budget > 0)
 			{
 				qty = Math.min(qty, Math.max(1, budget / Math.max(1, buyAt)));
 			}
-			line(g, x, y + 34, w, String.format("+%d each after tax · ~%,d traded/hr · limit %,d", net, volHr, limit),
-				GAIN, 12, false);
+			line(g, x, y + 34, w, String.format("+%d each after tax · ~%,d traded/hr · limit left %,d%s",
+				net, volHr, remaining, flowNote), GAIN, 12, false);
 			line(g, x, y + 51, w, String.format("qty %,d → +%,d gp · expect a wait", qty, (long) net * qty), GOLD, 13, true);
 		}
 		else

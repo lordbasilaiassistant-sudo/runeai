@@ -151,6 +151,38 @@ public class RuneAIPlugin extends Plugin
 		// the lane this offer was PLACED under. Frozen at placement: an overnight
 		// trap whose book heals by morning is still an overnight outcome.
 		FlipLane lane = FlipLane.QUICK;
+		// the book AS THE OFFER WAS PLACED — the features a fill model trains on.
+		// Frozen here because by the time the outcome is known the book has moved,
+		// and features measured at outcome time are leakage, not context.
+		long bookLow, bookHigh, vol5m;
+		double ofiAt;
+	}
+
+	// ---- 4h buy-limit ledger: id -> {whenMs, qty} purchases, rolling window ----
+	private static final long LIMIT_WINDOW_MS = 4 * 3600_000L;
+	private final Map<Integer, java.util.ArrayDeque<long[]>> buyWindow = new java.util.HashMap<>();
+
+	/**
+	 * Units still counting against the buy limit: prune everything older than
+	 * the window, sum the rest. Static and argument-fed so the boundary is
+	 * testable without a client.
+	 */
+	static long usedInWindow(java.util.Deque<long[]> entries, long nowMs)
+	{
+		if (entries == null)
+		{
+			return 0;
+		}
+		while (!entries.isEmpty() && nowMs - entries.peekFirst()[0] >= LIMIT_WINDOW_MS)
+		{
+			entries.removeFirst();
+		}
+		long sum = 0;
+		for (long[] e : entries)
+		{
+			sum += e[1];
+		}
+		return sum;
 	}
 	private final OfferTrack[] offerTracks = new OfferTrack[8];
 	private Map<String, long[]> savedOfferState = new java.util.HashMap<>();
@@ -198,6 +230,7 @@ public class RuneAIPlugin extends Plugin
 	private NavigationButton navButton;
 	private EventLog eventLog;
 	private EventLog tickLog;
+	private EventLog episodeLog; // the offer-outcome corpus: append-only, flush per row
 	private boolean greeted;
 	private int snapshotAtTick = -1;
 	private int damageTakenThisTick;
@@ -330,6 +363,17 @@ public class RuneAIPlugin extends Plugin
 		loadClog();
 		loadOfferState();
 		loadBookedOffers();
+		loadBuyWindow();
+		try
+		{
+			// one row per finished offer, accumulated across sessions — the corpus
+			// the fill/survival models train on. Rare rows, flushed immediately.
+			episodeLog = new EventLog(new File(DATA_DIR, "episodes.jsonl"), gson, true, true);
+		}
+		catch (Exception ex)
+		{
+			log.warn("episode log open failed", ex);
+		}
 		// a resumed session and the lifetime total are already known — show them
 		// now rather than after the first sell
 		panel.setFlipPnl(flipRealized, lifetimeRealized);
@@ -376,6 +420,7 @@ public class RuneAIPlugin extends Plugin
 		bookedOffers.clear();
 		flipBasis.clear();
 		tradeClog.clear();
+		buyWindow.clear(); // reloaded from disk in startUp — clearing prevents doubling
 		savedOfferState = new java.util.HashMap<>();
 		java.util.Arrays.fill(offerTracks, null);
 		buyFillSecs.clear();
@@ -434,6 +479,11 @@ public class RuneAIPlugin extends Plugin
 		{
 			tickLog.close();
 			tickLog = null;
+		}
+		if (episodeLog != null)
+		{
+			episodeLog.close();
+			episodeLog = null;
 		}
 		// the ledgers are written off-thread; make sure the last snapshot landed
 		AsyncWriter.flush(2_000);
@@ -576,6 +626,15 @@ public class RuneAIPlugin extends Plugin
 				tr.startMs = nowMs;
 				tr.lastFillMs = nowMs;
 				tr.lane = flipService.laneFor(o.getItemId());
+				// freeze the placement-time book: these are the episode's features
+				final long[] bk = flipService.bookFor(o.getItemId());
+				if (bk != null)
+				{
+					tr.bookLow = bk[0];
+					tr.bookHigh = bk[1];
+					tr.vol5m = bk[2];
+				}
+				tr.ofiAt = flipService.ofi(o.getItemId());
 				// restart-safe: if we tracked this exact offer before the client
 				// restarted, resume its counters — never re-book old fills.
 				// remove() not get(): this is a ONE-SHOT resume of what was on disk
@@ -598,6 +657,7 @@ public class RuneAIPlugin extends Plugin
 						tr.lane = FlipLane.LONG;
 					}
 					tr.realized = saved.length > 7 ? saved[7] : 0;
+					restoreBook(tr, saved);
 				}
 				offerTracks[slot] = tr;
 				saveOfferState();
@@ -637,6 +697,7 @@ public class RuneAIPlugin extends Plugin
 					tr.lane = FlipLane.LONG;
 				}
 				tr.realized = saved.length > 7 ? saved[7] : 0;
+				restoreBook(tr, saved);
 				offerTracks[slot] = tr;
 			}
 		}
@@ -657,6 +718,11 @@ public class RuneAIPlugin extends Plugin
 				{
 					flipBasis.merge(o.getItemId(), new long[]{dQty, dCoins},
 						(a, b) -> new long[]{a[0] + b[0], a[1] + b[1]});
+					// the 4h buy-limit ledger counts EVERY filled unit, carryover or
+					// not — the game's window doesn't care which session bought them
+					buyWindow.computeIfAbsent(o.getItemId(), k -> new java.util.ArrayDeque<>())
+						.addLast(new long[]{nowMs, dQty});
+					saveBuyWindow();
 					if (!carryover)
 					{
 						unitsBought += dQty;
@@ -773,6 +839,7 @@ public class RuneAIPlugin extends Plugin
 			{
 				sugFills++;
 			}
+			appendEpisode(tr, o, true, offlineFill);
 			mascot.celebrate(buying
 				? "Bought! Now sell it."
 				: "Cha-ching! Sold.");
@@ -797,6 +864,9 @@ public class RuneAIPlugin extends Plugin
 				// recorded, so the audit has to know about it
 				bookOffer(o.getItemId(), o.getQuantitySold(), o.getPrice(), buying);
 			}
+			// a cancel is a CENSORED fill-time observation: "this long was not
+			// enough" — the survival model's other half, never thrown away again
+			appendEpisode(tr, o, false, offlineFill);
 			itemMemory.recordStall(o.getItemId(), lane); // it stopped working — learn that
 			offerTracks[slot] = null;
 			saveOfferState(); // same as above: a cancelled slot must not be resumable
@@ -888,6 +958,19 @@ public class RuneAIPlugin extends Plugin
 				}
 			}
 			flipService.setBasisSnapshot(basisSnap);
+			// buy-limit consumption in the rolling 4h window: what the ranker and
+			// every qty suggestion must respect, or offers just sit at the cap
+			final Map<Integer, Long> used = new java.util.HashMap<>();
+			final long nowW = System.currentTimeMillis();
+			for (Map.Entry<Integer, java.util.ArrayDeque<long[]>> e : buyWindow.entrySet())
+			{
+				final long u = usedInWindow(e.getValue(), nowW);
+				if (u > 0)
+				{
+					used.put(e.getKey(), u);
+				}
+			}
+			flipService.setLimitUsed(used);
 			// log the scan itself: call -> outcome training needs what was
 			// suggested and when, including the calls the player ignored
 			if (System.currentTimeMillis() - lastFlipScanLogMs > 5 * 60_000)
@@ -913,6 +996,7 @@ public class RuneAIPlugin extends Plugin
 				d.put("fillModel", flipService.fillModelStatus());
 				d.put("brain", flipService.brainStatus());
 				d.put("champion", flipService.championStatus());
+				d.put("survival", flipService.survivalStatus());
 				emit("flipScan", d);
 			}
 			geFlipOverlay.setTrader(traderLevel,
@@ -1516,6 +1600,108 @@ public class RuneAIPlugin extends Plugin
 		return null;
 	}
 
+	/** Placement-book features saved with the track (offer-state indices 8..11). */
+	private static void restoreBook(OfferTrack tr, long[] saved)
+	{
+		if (saved.length > 11)
+		{
+			tr.bookLow = saved[8];
+			tr.bookHigh = saved[9];
+			tr.vol5m = saved[10];
+			tr.ofiAt = saved[11] / 1_000_000.0;
+		}
+	}
+
+	/**
+	 * One finished offer = one row of the training corpus: the book as the offer
+	 * was placed, what was asked, and what the market did about it. Fills are
+	 * events, cancels are right-censored ("this long was not enough") — the half
+	 * the old fill model never saw, which is why its "quick" was fiction.
+	 * Offline durations are still real durations: the market kept trading while
+	 * the player was logged out; the flag lets a trainer decide for itself.
+	 */
+	private void appendEpisode(OfferTrack tr, net.runelite.api.GrandExchangeOffer o,
+		boolean filled, boolean offline)
+	{
+		if (episodeLog == null || tr == null || tr.itemId != o.getItemId())
+		{
+			return;
+		}
+		final Map<String, Object> d = m();
+		d.put("item", o.getItemId());
+		d.put("buy", tr.buying);
+		d.put("price", tr.price);
+		d.put("qty", o.getTotalQuantity());
+		d.put("filledQty", o.getQuantitySold());
+		d.put("secs", Math.max(1, (System.currentTimeMillis() - tr.startMs) / 1000));
+		d.put("event", filled ? 1 : 0);
+		d.put("offline", offline);
+		d.put("lane", tr.lane.name());
+		d.put("bookLow", tr.bookLow);
+		d.put("bookHigh", tr.bookHigh);
+		d.put("vol5m", tr.vol5m);
+		d.put("ofi", tr.ofiAt);
+		d.put("realized", tr.realized);
+		episodeLog.log("episode", client.getTickCount(), d);
+	}
+
+	private void loadBuyWindow()
+	{
+		try
+		{
+			final File f = new File(DATA_DIR, "buy-window.json");
+			if (f.exists())
+			{
+				final Map<String, long[][]> raw = gson.fromJson(
+					new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8),
+					new com.google.gson.reflect.TypeToken<Map<String, long[][]>>(){}.getType());
+				if (raw != null)
+				{
+					final long now = System.currentTimeMillis();
+					for (Map.Entry<String, long[][]> e : raw.entrySet())
+					{
+						final java.util.ArrayDeque<long[]> dq = new java.util.ArrayDeque<>();
+						for (long[] row : e.getValue())
+						{
+							if (row.length >= 2 && now - row[0] < LIMIT_WINDOW_MS)
+							{
+								dq.addLast(row);
+							}
+						}
+						if (!dq.isEmpty())
+						{
+							buyWindow.put(Integer.parseInt(e.getKey()), dq);
+						}
+					}
+				}
+			}
+		}
+		catch (Exception ex)
+		{
+			log.warn("buy window load failed", ex);
+		}
+	}
+
+	private void saveBuyWindow()
+	{
+		try
+		{
+			final Map<String, long[][]> out = new java.util.HashMap<>();
+			for (Map.Entry<Integer, java.util.ArrayDeque<long[]>> e : buyWindow.entrySet())
+			{
+				if (!e.getValue().isEmpty())
+				{
+					out.put(String.valueOf(e.getKey()), e.getValue().toArray(new long[0][]));
+				}
+			}
+			AsyncWriter.write(new File(DATA_DIR, "buy-window.json"), gson.toJson(out));
+		}
+		catch (Exception ex)
+		{
+			log.warn("buy window save failed", ex);
+		}
+	}
+
 	private long syntheticCost(int itemId, int sellPrice, long qty)
 	{
 		final long[] q = flipService.quoteFor(itemId);
@@ -1594,7 +1780,8 @@ public class RuneAIPlugin extends Plugin
 				if (t != null)
 				{
 					out.put(String.valueOf(i), new long[]{t.itemId, t.price, t.lastQty,
-						t.lastSpent, t.startMs, t.lastFillMs, t.lane.ordinal(), t.realized});
+						t.lastSpent, t.startMs, t.lastFillMs, t.lane.ordinal(), t.realized,
+						t.bookLow, t.bookHigh, t.vol5m, (long) (t.ofiAt * 1_000_000)});
 				}
 			}
 			AsyncWriter.write(new File(DATA_DIR, "offer-state.json"), gson.toJson(out));

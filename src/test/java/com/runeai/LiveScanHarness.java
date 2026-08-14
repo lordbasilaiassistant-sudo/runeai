@@ -35,7 +35,8 @@ public final class LiveScanHarness
 		final Gson gson = new Gson();
 		final ItemMemory memory = new ItemMemory(gson);
 		final FlipService svc = new FlipService(new OkHttpClient(), gson, memory,
-			new FillTimeModel(gson), new GeBrain(gson), new Champion(gson));
+			new FillTimeModel(gson), new GeBrain(gson), new Champion(gson),
+			new SurvivalFillModel(gson));
 		svc.setContext(50_000_000L, false);
 		svc.setLaneConfig(true, 300, 6, true);
 		svc.maybeRefresh();

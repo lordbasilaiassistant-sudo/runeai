@@ -55,6 +55,17 @@ class FlipService
 	private volatile List<Flip> allFlips = List.of();
 	private final Map<Integer, long[]> quotes = new ConcurrentHashMap<>(); // id -> {buyAt, sellAt (capped), volHr}
 	private final Map<Integer, long[]> books = new ConcurrentHashMap<>();  // id -> {low, high RAW, vol5m, highTime}
+	/**
+	 * Order flow, kept SPLIT: id -> {instaBuyVol, instaSellVol}. The 5m feed
+	 * reports buyer-initiated and seller-initiated volume separately, and summing
+	 * them (as the ranker used to) throws away the single most standard
+	 * microstructure signal there is — who is crossing the spread. More
+	 * insta-buys than insta-sells means demand is lifting the book, which is
+	 * exactly the condition under which YOUR sell side clears.
+	 */
+	private final Map<Integer, long[]> flow = new ConcurrentHashMap<>();
+	/** This player's buy-limit consumption in the rolling 4h window: id -> units bought. */
+	private volatile Map<Integer, Long> limitUsed = Map.of();
 	private final java.util.Set<Integer> trapItems = ConcurrentHashMap.newKeySet();
 	private final Map<Integer, Long> predictedMid = new ConcurrentHashMap<>(); // last scan's forecast
 	/** Rolling mid window: {@link #WINDOW_SCANS} scans at {@link #FAST_MS}, so ~6 minutes. */
@@ -99,6 +110,58 @@ class FlipService
 	void setBasisSnapshot(Map<Integer, long[]> b)
 	{
 		basis = b;
+	}
+
+	/** Units bought per item inside the rolling 4h window, from the plugin's ledger. */
+	void setLimitUsed(Map<Integer, Long> used)
+	{
+		limitUsed = used;
+	}
+
+	/**
+	 * Buy-limit capacity LEFT in this 4h window. The interface enforces the
+	 * limit silently — an offer past it just sits — so a suggestion that
+	 * ignores consumption is a coached dead slot.
+	 */
+	long remainingLimit(int itemId)
+	{
+		return Math.max(0, limitFor(itemId) - limitUsed.getOrDefault(itemId, 0L));
+	}
+
+	/**
+	 * Signed order-flow imbalance in [-1, 1]: (instaBuys − instaSells) / total
+	 * over the last 5 minutes. Positive = buyers are crossing the spread =
+	 * demand — the side that clears YOUR sell. 0 when unknown.
+	 */
+	double ofi(int itemId)
+	{
+		final long[] f = flow.get(itemId);
+		if (f == null || f[0] + f[1] <= 0)
+		{
+			return 0;
+		}
+		return (f[0] - f[1]) / (double) (f[0] + f[1]);
+	}
+
+	/**
+	 * The OFI ranking factor, clamped so one 5m window can tilt but never
+	 * dominate. Symmetric and linear: no cliff for the momentum factor to
+	 * fight with.
+	 */
+	static double flowFactor(double ofi)
+	{
+		return Math.max(0.75, Math.min(1.25, 1 + 0.25 * ofi));
+	}
+
+	/**
+	 * gp per slot-second of the CURRENT best pick — the opportunity cost of
+	 * leaving a slot parked on something worse. 0 while the board is empty.
+	 */
+	double bestVelocity()
+	{
+		final List<Flip> top = cachedTop;
+		final long b = budget;
+		return top.isEmpty() || b <= 0 ? 0 : velocity(top.get(0), slotCapital(b));
 	}
 
 	/** Average gp paid per unit still held of this item, or -1 with no open basis. */
@@ -163,10 +226,11 @@ class FlipService
 	private final FillTimeModel fillModel;
 	private final GeBrain brain;
 	private final Champion champion;
+	private final SurvivalFillModel survival;
 
 	@Inject
 	FlipService(OkHttpClient http, Gson gson, ItemMemory itemMemory, FillTimeModel fillModel,
-		GeBrain brain, Champion champion)
+		GeBrain brain, Champion champion, SurvivalFillModel survival)
 	{
 		this.http = http;
 		this.gson = gson;
@@ -174,6 +238,12 @@ class FlipService
 		this.fillModel = fillModel;
 		this.brain = brain;
 		this.champion = champion;
+		this.survival = survival;
+	}
+
+	String survivalStatus()
+	{
+		return survival.status();
 	}
 
 	String fillModelStatus()
@@ -246,6 +316,10 @@ class FlipService
 			{
 				continue;
 			}
+			if (remainingLimit(f.getItemId()) <= 0)
+			{
+				continue; // 4h buy limit spent — an offer would just sit, whatever the margin
+			}
 			// the ONLY affordability gate is the actual coin stack — a trader-level
 			// price tier used to hide flips the player could pay for, which made the
 			// level a tax on the bankroll instead of a scoreboard
@@ -272,6 +346,7 @@ class FlipService
 					-velocity(f, slotCapital(b))
 						* itemMemory.scoreMultiplier(f.getItemId())
 						* momentumFactor(f.getItemId())
+						* flowFactor(ofi(f.getItemId()))
 						* brainFactor(f.getItemId(), f.getBuyAt(), f.getNet()))));
 		}
 		final List<Flip> top = List.copyOf(out.subList(0, Math.min(8, out.size())));
@@ -340,7 +415,11 @@ class FlipService
 		final double afford = slotCapital > 0
 			? (double) slotCapital / Math.max(1, f.getBuyAt())
 			: throughput;
-		return f.getNet() * Math.max(0.001, Math.min(throughput, afford)) / cyc;
+		// three binds, tightest wins: what the book passes, what the coins carry,
+		// what the 4h buy limit still allows
+		final double units = Math.min(Math.min(throughput, afford),
+			Math.max(0, remainingLimit(f.getItemId())));
+		return f.getNet() * Math.max(0.001, units) / cyc;
 	}
 
 	/** One quick slot's share of the coins — the lane runs them in parallel. */
@@ -372,7 +451,23 @@ class FlipService
 	long estCycleSecs(int itemId, long vol5m)
 	{
 		long prior = FlipLane.priorCycleSecs(vol5m);
-		if (fillModel.adopted())
+		// The survival model is the only estimator that has seen the offers that
+		// did NOT fill (fitted 2026-08-14: k=0.43 — decreasing hazard — and a
+		// measured ~10min median side vs the shape prior's tens of seconds). Its
+		// v0 features carry no volume, so it CALIBRATES the level while the
+		// volume shape keeps the relative ordering: geometric blend of the two.
+		if (survival.adopted())
+		{
+			final long[] bk = books.get(itemId);
+			final long price = bk != null ? bk[0] + 1 : 1000;
+			final long s = survival.cycleSecs(price,
+				java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC).getHour());
+			if (s > 0)
+			{
+				prior = Math.max(1, (long) Math.sqrt((double) prior * s));
+			}
+		}
+		else if (fillModel.adopted())
 		{
 			// qty is the order the ranker would actually place at the prior cycle
 			// length — computed first so the model is never asked to predict from
@@ -692,11 +787,12 @@ class FlipService
 		}
 		get("/latest", latestBody ->
 		{
-			// all three learned artifacts load here: an OkHttp callback thread, never
+			// all learned artifacts load here: an OkHttp callback thread, never
 			// the client thread, and every one of them is gated on its own verdict
 			fillModel.ensureLoaded();
 			brain.ensureLoaded();
 			champion.ensureLoaded();
+			survival.ensureLoaded();
 			final JsonObject latest = gson.fromJson(latestBody, JsonObject.class).getAsJsonObject("data");
 			final JsonObject five = gson.fromJson(fiveBody, JsonObject.class).getAsJsonObject("data");
 			final List<Flip> flips = new ArrayList<>();
@@ -729,8 +825,13 @@ class FlipService
 				if (v5 != null)
 				{
 					final JsonObject v = v5.getAsJsonObject();
-					vol = (v.has("highPriceVolume") ? v.get("highPriceVolume").getAsLong() : 0)
-						+ (v.has("lowPriceVolume") ? v.get("lowPriceVolume").getAsLong() : 0);
+					// SPLIT, not summed: highPriceVolume is buyer-initiated (someone
+					// crossed to the ask), lowPriceVolume is seller-initiated. Their
+					// imbalance is the order-flow signal; their sum is just liquidity.
+					final long bv = v.has("highPriceVolume") ? v.get("highPriceVolume").getAsLong() : 0;
+					final long sv = v.has("lowPriceVolume") ? v.get("lowPriceVolume").getAsLong() : 0;
+					vol = bv + sv;
+					flow.put(id, new long[]{bv, sv});
 				}
 				// PREDICT -> SCORE -> PUNISH: last scan forecast "mid holds";
 				// grade it now, demote items that surprised us (negative reward)
@@ -857,10 +958,10 @@ class FlipService
 			freshAnomalies = found;
 			itemMemory.flush(); // one write for the whole scan's memory updates
 			lastScanAvgErr = errN > 0 ? errSum / errN : -1;
-			log.info("flip scan: {} candidates, {} anomalies, market surprise {} | brain {} | champion {} | fill model {}",
+			log.info("flip scan: {} candidates, {} anomalies, market surprise {} | brain {} | champion {} | fill model {} | survival {}",
 				flips.size(), found.size(),
 				lastScanAvgErr >= 0 ? String.format("%.2f%%", lastScanAvgErr * 100) : "n/a",
-				brain.status(), champion.status(), fillModel.status());
+				brain.status(), champion.status(), fillModel.status(), survival.status());
 		});
 	}
 

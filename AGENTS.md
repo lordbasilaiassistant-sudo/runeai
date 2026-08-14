@@ -59,6 +59,14 @@ All source lives in `src/main/java/com/runeai/`.
 | `train/train_flip_model.py` | Ridge regression on log(seconds-to-fill) → `train/flip_model.json`, judged K-fold out-of-sample. |
 | `runelite-plugin.properties` | Hub manifest (displayName, version, `plugins=com.runeai.RuneAIPlugin`). |
 
+### The math
+
+**`docs/FLIP-MATH.md` is the reference model of the GE market** — what each
+estimator measures, the censoring structure of fill times, order-flow
+imbalance, the gp-per-slot-second ranking, the breakeven floor, optimal
+stopping, and the honest RL roadmap. Read it before changing anything in
+`FlipService`, `SurvivalFillModel`, or the trainers.
+
 ### Learned artifacts and their gates
 
 Five models can influence what the plugin says. **Every one of them is gated on a

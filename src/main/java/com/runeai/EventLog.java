@@ -20,12 +20,30 @@ class EventLog implements AutoCloseable
 {
 	private final Gson gson;
 	private final BufferedWriter writer;
+	private final boolean flushEach;
 	private long lines;
 
 	EventLog(File file, Gson gson) throws IOException
 	{
+		this(file, gson, false, false);
+	}
+
+	/**
+	 * @param append    open the file in append mode — for logs that accumulate
+	 *                  across sessions (the episode corpus) instead of starting
+	 *                  fresh each run
+	 * @param flushEach flush after every line — for rare, high-value rows where
+	 *                  losing the last buffered ones to a crash would cost data
+	 *                  a model trains on
+	 */
+	EventLog(File file, Gson gson, boolean append, boolean flushEach) throws IOException
+	{
 		this.gson = gson;
-		this.writer = Files.newBufferedWriter(file.toPath(), StandardCharsets.UTF_8);
+		this.flushEach = flushEach;
+		this.writer = append
+			? Files.newBufferedWriter(file.toPath(), StandardCharsets.UTF_8,
+				java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND)
+			: Files.newBufferedWriter(file.toPath(), StandardCharsets.UTF_8);
 	}
 
 	synchronized void log(String type, int tick, Map<String, Object> data)
@@ -42,7 +60,8 @@ class EventLog implements AutoCloseable
 			}
 			writer.write(gson.toJson(line));
 			writer.newLine();
-			if (++lines % 50 == 0)
+			lines++;
+			if (flushEach || lines % 50 == 0)
 			{
 				writer.flush();
 			}

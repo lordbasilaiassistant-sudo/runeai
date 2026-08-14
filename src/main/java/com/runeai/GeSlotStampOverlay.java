@@ -127,8 +127,14 @@ public class GeSlotStampOverlay extends Overlay
 				}
 				else if (isDead(i, o))
 				{
+					// opportunity cost: a dead buy holds a slot the board could
+					// redeploy — when the best live pick out-earns this offer's whole
+					// remaining upside in ~3 minutes, the slot is worth more empty
+					final long remainingUpside = margin * (o.getTotalQuantity() - o.getQuantitySold());
+					final boolean redeploy = flips.bestVelocity() * 180 > remainingUpside;
 					l1 = "DEAD " + placedMin(i) + "m";
-					l2 = stepUp > o.getPrice() ? "rebuy " + fmt(stepUp) : "margin thin · skip";
+					l2 = redeploy ? "redeploy — slot beats it"
+						: stepUp > o.getPrice() ? "rebuy " + fmt(stepUp) : "margin thin · skip";
 					c = ABORT;
 				}
 				else if (isSlow(i, o))

@@ -103,7 +103,8 @@ public class OfferLifecycleHarnessTest
 	private static FlipService service(Gson gson, ItemMemory memory)
 	{
 		return new FlipService(new OkHttpClient(), gson, memory,
-			new FillTimeModel(gson), new GeBrain(gson), new Champion(gson));
+			new FillTimeModel(gson), new GeBrain(gson), new Champion(gson),
+			new SurvivalFillModel(gson));
 	}
 
 	private static GrandExchangeOffer offer(int item, int price, int qtySold, int spent,
