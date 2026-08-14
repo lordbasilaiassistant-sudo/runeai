@@ -121,7 +121,15 @@ class TradeHistory
 		}
 		else
 		{
-			// flat run: an item sprite opens a row, everything after it belongs to it
+			// FLAT RUN — and the cell order is the thing to get right. Measured from
+			// a live client (event log 2026-08-14): the widgets arrive as
+			//   [direction_0, name_0, sprite_0, price_0, direction_1, name_1, sprite_1, ...]
+			// The old grouping opened a row at each sprite, which glued row N's price
+			// to row N+1's direction and name — every row then disagreed with the
+			// ledger and a 29-row history audited as a +12.2B "hole". So: text cells
+			// BEFORE a sprite belong to that sprite's row; text cells after it are
+			// the price block until the next direction/name text shows up.
+			final List<Widget> pending = new ArrayList<>();
 			List<Widget> current = null;
 			for (Widget c : cells)
 			{
@@ -131,11 +139,25 @@ class TradeHistory
 					{
 						addRow(rows, current);
 					}
-					current = new ArrayList<>();
+					current = new ArrayList<>(pending);
+					pending.clear();
+					current.add(c);
+					continue;
 				}
-				if (current != null)
+				final String t = plain(c.getText());
+				if (t.isEmpty())
+				{
+					continue;
+				}
+				// a direction or name cell after a sprite belongs to the NEXT row;
+				// coin text is this row's price block
+				if (current != null && t.contains("coin"))
 				{
 					current.add(c);
+				}
+				else
+				{
+					pending.add(c);
 				}
 			}
 			if (current != null)
@@ -272,15 +294,22 @@ class TradeHistory
 			{
 				continue;
 			}
-			if (t.contains("each") || t.contains(" ea") || t.contains("per "))
+			// the live client's price block reads "994,923 coins (1,014,732 - 19,809)
+			// = 1,557 each": the FIRST number is the row's total coins, and the
+			// per-unit price is the number immediately before "each" — grabbing
+			// nums.get(0) for "each" booked totals as unit prices and made a 29-row
+			// history audit as +12.2B
+			if (t.contains("coin"))
 			{
-				each = nums.get(0);
+				total = nums.get(0);
 			}
-			else if (t.contains("total") || t.contains(" for "))
+			final java.util.regex.Matcher ea = java.util.regex.Pattern
+				.compile("([\\d,]+)(?: coins)? (?:each|ea\\b|per\\b)").matcher(t);
+			if (ea.find())
 			{
-				total = nums.get(nums.size() - 1);
+				each = Long.parseLong(ea.group(1).replace(",", ""));
 			}
-			else if (qty <= 0 && (t.contains("x ") || t.contains(" x")))
+			if (qty <= 0 && (t.contains("x ") || t.contains(" x")))
 			{
 				qty = nums.get(0);
 			}
@@ -309,9 +338,12 @@ class TradeHistory
 	 */
 	static boolean priceAgrees(long gamePrice, long bookedPrice, boolean bought)
 	{
+		// ±1gp tolerance on the sell convention: the interface's "each" divides a
+		// post-tax TOTAL by the quantity while we subtract a per-unit tax, and the
+		// two floors can land one gp apart. A rounding artifact is not a discrepancy.
 		return gamePrice == bookedPrice
 			|| (!bought && bookedPrice > 0 && bookedPrice <= Integer.MAX_VALUE
-				&& gamePrice == bookedPrice - FlipService.geTax((int) bookedPrice));
+				&& Math.abs(gamePrice - (bookedPrice - FlipService.geTax((int) bookedPrice))) <= 1);
 	}
 
 	/**

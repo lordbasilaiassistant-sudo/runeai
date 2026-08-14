@@ -19,6 +19,9 @@ import net.runelite.client.ui.overlay.OverlayPosition;
  * Verdict stamps ON the GE slot boxes: KEEP / CANCEL & reprice / ABORT.
  * Rule-based v1 (live-quote comparison) — every verdict is logged, and the
  * player's response to it is the training data for the learned policy.
+ *
+ * <p>Two short lines, never wider than the slot they grade. A stamp that
+ * bleeds into the neighbouring slot is advice about the wrong offer.
  */
 public class GeSlotStampOverlay extends Overlay
 {
@@ -86,7 +89,8 @@ public class GeSlotStampOverlay extends Overlay
 				continue;
 			}
 			final long low = q[0] - 1, high = q[1] + 1;
-			String label;
+			String l1;
+			String l2 = null;
 			Color c;
 			final boolean buying = o.getState() == GrandExchangeOfferState.BUYING
 				|| o.getState() == GrandExchangeOfferState.BOUGHT;
@@ -98,11 +102,9 @@ public class GeSlotStampOverlay extends Overlay
 			{
 				// One-sided book: the only recent high print is a whale overpaying
 				// into an empty market. Every reprice target derived from it is
-				// fiction, so quote no target at all — say what the item is worth
-				// and let the offer sit.
-				label = buying
-					? "THIN BOOK · worth ~" + fmt(low) + " · don't chase"
-					: "THIN BOOK · patience order · hold";
+				// fiction, so quote no target at all.
+				l1 = "THIN BOOK";
+				l2 = buying ? "worth ~" + fmt(low) + " · don't chase" : "patience order · hold";
 				c = TRAP;
 			}
 			else if (buying)
@@ -113,41 +115,39 @@ public class GeSlotStampOverlay extends Overlay
 				final long stepUp = Math.min(o.getPrice() + spreadStep, maxBuy);
 				if (margin <= 0)
 				{
-					label = "ABORT — margin gone";
+					l1 = "ABORT";
+					l2 = "margin gone";
 					c = ABORT;
 				}
 				else if (o.getPrice() < low)
 				{
-					label = "CANCEL · rebuy " + fmt(Math.max(low + 1, stepUp));
+					l1 = "CANCEL";
+					l2 = "rebuy " + fmt(Math.max(low + 1, stepUp));
 					c = MOVE;
 				}
 				else if (isDead(i, o))
 				{
-					label = stepUp > o.getPrice()
-						? "DEAD " + placedMin(i) + "m · rebuy @ " + fmt(stepUp)
-						: "DEAD " + placedMin(i) + "m · margin thin, skip item";
+					l1 = "DEAD " + placedMin(i) + "m";
+					l2 = stepUp > o.getPrice() ? "rebuy " + fmt(stepUp) : "margin thin · skip";
 					c = ABORT;
 				}
 				else if (isSlow(i, o))
 				{
-					label = stepUp > o.getPrice()
-						? "STALLED " + ageMin(i) + "m · rebuy @ " + fmt(stepUp)
-						: "STALLED " + ageMin(i) + "m · margin thin";
+					l1 = "STALLED " + ageMin(i) + "m";
+					l2 = stepUp > o.getPrice() ? "rebuy " + fmt(stepUp) : "margin thin";
 					c = MOVE;
 				}
 				else
 				{
-					label = "KEEP ✓";
+					l1 = "KEEP ✓";
 					c = KEEP;
 				}
 			}
 			else
 			{
 				// THE FLOOR UNDER EVERY SELL SUGGESTION: what was actually paid.
-				// The repricer used to walk a stalled sell down toward the live
-				// book with no memory of the buy — "you waited to buy it, now sell
-				// it at a loss". A reprice below breakeven is not a reprice, it is
-				// a realized loss, and it gets said in those words or not at all.
+				// A reprice below breakeven is not a reprice, it is a realized
+				// loss, and it gets said in those words or not at all.
 				final long avg = flips.avgCost(o.getItemId());
 				final long breakeven = avg >= 0 ? FlipService.breakevenSell(avg) : -1;
 				final long floor = Math.max(low, breakeven);
@@ -157,53 +157,48 @@ public class GeSlotStampOverlay extends Overlay
 					? avg - (low - FlipService.geTax((int) low)) : 0;
 				if (heldExtra > 0)
 				{
-					// selling while holding more of the same item wastes the slot:
-					// one consolidated offer moves everything
-					label = "ADD " + fmt(heldExtra) + " MORE · relist all";
+					l1 = "ADD " + fmt(heldExtra) + " MORE";
+					l2 = "relist all as one";
 					c = MOVE;
 				}
 				else if (breakeven > 0 && o.getPrice() < breakeven)
 				{
-					// the player already typed a losing price — say the number
 					final long lossEa = avg - (o.getPrice() - FlipService.geTax(o.getPrice()));
-					label = "LISTED BELOW COST · −" + fmt(lossEa) + "/ea";
+					l1 = "BELOW COST";
+					l2 = "−" + fmt(lossEa) + "/ea if it fills";
 					c = ABORT;
 				}
 				else if (breakeven > 0 && high < breakeven)
 				{
-					// the whole book is under what was paid: exiting is a LOSS
-					// decision, never a coached reprice
-					label = "UNDER WATER · hold (−" + fmt(Math.max(1, exitNowLoss)) + "/ea to exit)";
+					l1 = "UNDER WATER";
+					l2 = "hold · exit −" + fmt(Math.max(1, exitNowLoss)) + "/ea";
 					c = ABORT;
 				}
 				else if (o.getPrice() > high)
 				{
-					label = "CANCEL · relist " + fmt(Math.max(Math.min(high - 1, stepDown), floor));
+					l1 = "CANCEL";
+					l2 = "relist " + fmt(Math.max(Math.min(high - 1, stepDown), floor));
 					c = MOVE;
 				}
 				else if (isDead(i, o))
 				{
-					label = stepDown < o.getPrice()
-						? "DEAD " + placedMin(i) + "m · resell @ " + fmt(stepDown)
-							+ (stepDown == breakeven ? " (breakeven)" : "")
-						: breakeven > 0 && o.getPrice() <= breakeven
-							? "DEAD " + placedMin(i) + "m · at breakeven, hold"
-							: "DEAD " + placedMin(i) + "m · at floor, hold";
+					l1 = "DEAD " + placedMin(i) + "m";
+					l2 = stepDown < o.getPrice()
+						? "resell " + fmt(stepDown) + (stepDown == breakeven ? " =BE" : "")
+						: breakeven > 0 && o.getPrice() <= breakeven ? "at breakeven · hold" : "at floor · hold";
 					c = ABORT;
 				}
 				else if (isSlow(i, o))
 				{
-					label = stepDown < o.getPrice()
-						? "STALLED " + ageMin(i) + "m · resell @ " + fmt(stepDown)
-							+ (stepDown == breakeven ? " (breakeven)" : "")
-						: breakeven > 0 && o.getPrice() <= breakeven
-							? "STALLED " + ageMin(i) + "m · at breakeven, hold"
-							: "STALLED " + ageMin(i) + "m · at floor";
+					l1 = "STALLED " + ageMin(i) + "m";
+					l2 = stepDown < o.getPrice()
+						? "resell " + fmt(stepDown) + (stepDown == breakeven ? " =BE" : "")
+						: breakeven > 0 && o.getPrice() <= breakeven ? "at breakeven · hold" : "at floor";
 					c = MOVE;
 				}
 				else
 				{
-					label = "KEEP ✓";
+					l1 = "KEEP ✓";
 					c = KEEP;
 				}
 			}
@@ -218,27 +213,54 @@ public class GeSlotStampOverlay extends Overlay
 			{
 				final long secs = (System.currentTimeMillis() - offerPlaced[i]) / 1000;
 				final String age = secs < 60 ? secs + "s"
-					: secs < 3600 ? (secs / 60) + "m" + (secs % 60 < 10 ? "0" : "") + (secs % 60) + "s"
+					: secs < 3600 ? (secs / 60) + "m"
 					: (secs / 3600) + "h" + ((secs % 3600) / 60) + "m";
-				g.setFont(g.getFont().deriveFont(Font.BOLD, 12f));
+				g.setFont(g.getFont().deriveFont(Font.BOLD, 11f));
 				final int aw = g.getFontMetrics().stringWidth(age);
 				g.setColor(new Color(10, 10, 14, 200));
-				g.fillRoundRect(b.x + b.width - aw - 12, b.y + 2, aw + 10, 15, 7, 7);
+				g.fillRoundRect(b.x + b.width - aw - 11, b.y + 2, aw + 9, 14, 7, 7);
 				g.setColor(secs > 1800 ? ABORT : secs > 300 ? MOVE : new Color(255, 255, 0));
-				g.drawString(age, b.x + b.width - aw - 7, b.y + 14);
+				g.drawString(age, b.x + b.width - aw - 6, b.y + 13);
 			}
 
-			g.setFont(g.getFont().deriveFont(Font.BOLD, 13f));
-			final int tw = g.getFontMetrics().stringWidth(label);
-			final int px = b.x + (b.width - tw) / 2 - 5;
-			final int py = b.y + b.height - 21;
-			g.setColor(new Color(10, 10, 14, 220));
-			g.fillRoundRect(px, py, tw + 12, 18, 9, 9);
-			g.setColor(c);
-			g.drawRoundRect(px, py, tw + 12, 18, 9, 9);
-			g.drawString(label, px + 6, py + 14);
+			// the stamp: one or two lines, CLAMPED inside this slot's box
+			stamp(g, b, l1, l2, c);
 		}
 		return null;
+	}
+
+	/** Draw the verdict inside the slot — never wider than the slot itself. */
+	private static void stamp(Graphics2D g, Rectangle b, String l1, String l2, Color c)
+	{
+		final int maxW = b.width - 6;
+		final int lines = l2 == null ? 1 : 2;
+		final int boxH = lines * 14 + 4;
+		final int by = b.y + b.height - boxH - 2;
+		g.setColor(new Color(10, 10, 14, 225));
+		g.fillRoundRect(b.x + 3, by, b.width - 6, boxH, 7, 7);
+		g.setColor(c);
+		g.drawRoundRect(b.x + 3, by, b.width - 6, boxH, 7, 7);
+		g.setFont(g.getFont().deriveFont(Font.BOLD, 11f));
+		g.drawString(clamp(g, l1, maxW - 8), b.x + 7, by + 12);
+		if (l2 != null)
+		{
+			g.setFont(g.getFont().deriveFont(Font.PLAIN, 11f));
+			g.drawString(clamp(g, l2, maxW - 8), b.x + 7, by + 26);
+		}
+	}
+
+	private static String clamp(Graphics2D g, String s, int maxPx)
+	{
+		if (g.getFontMetrics().stringWidth(s) <= maxPx)
+		{
+			return s;
+		}
+		String a = s;
+		while (a.length() > 2 && g.getFontMetrics().stringWidth(a + "…") > maxPx)
+		{
+			a = a.substring(0, a.length() - 1);
+		}
+		return a + "…";
 	}
 
 	private long heldInInventory(int itemId)

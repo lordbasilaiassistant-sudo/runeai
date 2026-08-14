@@ -5,6 +5,7 @@ import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Graphics2D;
+import java.awt.Rectangle;
 import java.awt.RenderingHints;
 import java.util.ArrayList;
 import java.util.List;
@@ -21,14 +22,36 @@ import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
 
 /**
- * In-game flip advice, shown only while the GE window is open — help lives
- * in the game window, the sidebar is for settings/status. Alt-drag to move.
+ * The GE window IS the dashboard. Nothing floats beside the interface any
+ * more — advice is drawn into the real estate the interface already spends:
+ *
+ * <ul>
+ *   <li><b>Empty slots</b> become pick tiles: the next quick-lane flip or
+ *       patience order to park, name in the slot's title strip and prices in
+ *       its bottom strip. The buy/sell buttons in the middle stay untouched
+ *       and clickable.</li>
+ *   <li><b>The footer strip</b> under the slot grid carries the session line:
+ *       realized P&L, gp/h, all-time, fill medians, trader level.</li>
+ *   <li><b>The offer-setup screen</b> gets the coach drawn over the item
+ *       description panel — the space the interface spends re-telling you what
+ *       a mushroom is — never over the quantity/price buttons.</li>
+ * </ul>
+ *
+ * Occupied slots belong to {@link GeSlotStampOverlay}'s verdict stamps.
  */
 public class GeFlipOverlay extends Overlay
 {
 	private static final Color GOLD = new Color(255, 200, 0);
 	private static final Color TRAP = new Color(190, 140, 255);
-	private static final int W = 304;
+	private static final Color GAIN = new Color(120, 220, 140);
+	private static final Color LOSS = new Color(255, 100, 100);
+	private static final Color BG = new Color(12, 12, 18, 225);
+
+	/** GE interface group and its well-known children. */
+	private static final int GE_GROUP = 465;
+	private static final int GE_FIRST_SLOT_CHILD = 7;
+	/** The setup screen's item-description panel (ComponentID.GRAND_EXCHANGE_OFFER_DESCRIPTION). */
+	private static final int GE_SETUP_DESC_CHILD = 27;
 
 	private final Client client;
 	private final RuneAIConfig config;
@@ -94,9 +117,9 @@ public class GeFlipOverlay extends Overlay
 		this.config = config;
 		this.flips = flips;
 		this.itemManager = itemManager;
-		setPosition(OverlayPosition.ABOVE_CHATBOX_RIGHT); // default where it does not cover the GE window
+		// DYNAMIC: everything here is anchored to real GE widget bounds
+		setPosition(OverlayPosition.DYNAMIC);
 		setLayer(OverlayLayer.ABOVE_WIDGETS);
-		setMovable(true);
 	}
 
 	@Override
@@ -106,208 +129,179 @@ public class GeFlipOverlay extends Overlay
 		{
 			return null;
 		}
-		final Widget ge = client.getWidget(465, 0);
+		final Widget ge = client.getWidget(GE_GROUP, 0);
 		if (ge == null || ge.isHidden())
 		{
 			return null;
 		}
+		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 		final int setupItem = client.getVarpValue(net.runelite.api.VarPlayer.CURRENT_GE_ITEM);
 		if (setupItem > 0)
 		{
-			return renderOfferCoach(g, setupItem);
+			renderOfferCoach(g, setupItem);
+			return null;
 		}
-		// item-search open = THE decision moment: big clear picks
+		// item-search open = THE decision moment: big clear picks over the setup area
 		final Widget searchBox = client.getWidget(162, 42);
 		if (searchBox != null && !searchBox.isHidden())
 		{
-			return renderPicker(g);
+			renderPicker(g);
+			return null;
 		}
+		renderDash(g);
+		return null;
+	}
 
-		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+	// ================= the main screen: slots as dashboard =================
 
-		// compact one-liners for every live offer
-		final List<String[]> pos = new ArrayList<>();
+	private void renderDash(Graphics2D g)
+	{
 		final GrandExchangeOffer[] offers = client.getGrandExchangeOffers();
 		final java.util.Set<Integer> activeItems = new java.util.HashSet<>();
 		for (GrandExchangeOffer o : offers)
 		{
-			final net.runelite.api.GrandExchangeOfferState st = o == null ? null : o.getState();
-			if (o == null || o.getItemId() <= 0 || st == net.runelite.api.GrandExchangeOfferState.EMPTY)
+			if (o != null && o.getItemId() > 0
+				&& o.getState() != GrandExchangeOfferState.EMPTY)
 			{
-				continue;
+				activeItems.add(o.getItemId());
 			}
-			activeItems.add(o.getItemId());
-			final boolean buying = st == net.runelite.api.GrandExchangeOfferState.BUYING
-				|| st == net.runelite.api.GrandExchangeOfferState.BOUGHT;
-			final long[] q = flips.quoteFor(o.getItemId());
-			String plan = "";
-			if (buying && q != null)
-			{
-				// a trap item's "profit" is the whale print times quantity — fiction
-				plan = config.trapGuard() && flips.isTrap(o.getItemId())
-					? "→thin book"
-					: "→+" + fmtK((q[1] - FlipService.geTax((int) q[1]) - o.getPrice()) * o.getTotalQuantity());
-			}
-			else if (!buying)
-			{
-				plan = "→" + fmtK((long) (o.getPrice() - FlipService.geTax(o.getPrice())) * o.getTotalQuantity());
-			}
-			pos.add(new String[]{buying ? "BUY" : "SELL", flips.nameFor(o.getItemId()),
-				String.format("%d/%d  %s", o.getQuantitySold(), o.getTotalQuantity(), plan),
-				buying ? "b" : "s"});
 		}
 
-		final List<FlipService.Flip> top = new ArrayList<>();
+		// the queue of cards to deal onto empty slots: patience orders first
+		// (the plugin already budgeted how many), then quick-lane picks
+		final List<TrapBoard.Pick> trapCards = new ArrayList<>(traps);
+		final List<FlipService.Flip> quickCards = new ArrayList<>();
 		for (FlipService.Flip f : flips.getTopFlips())
 		{
 			if (!activeItems.contains(f.getItemId()))
 			{
-				top.add(f);
+				quickCards.add(f);
 			}
 		}
-		final int freeSlots = Math.max(0, totalSlots - activeSlots);
-		// heading offline flips the emphasis: the board takes the space, the quick
-		// lane keeps one line so a genuinely fast flip is still visible
-		final int rows = freeSlots == 0 ? 0 : Math.min(overnight ? 1 : 3, top.size());
-		final int shown = Math.min(pos.size(), 6);
-		final java.util.List<TrapBoard.Pick> tp = traps;
-		final int trapRows = freeSlots == 0 ? 0 : Math.min(overnight ? 4 : 2, tp.size());
 
-		final int h = 48 + (pendingSells.isEmpty() ? 0 : pendingSells.size() * 16)
-			+ (shown > 0 ? 15 + shown * 18 : 0)
-			+ (rows > 0 ? 15 + rows * 18 : 0)
-			+ (trapRows > 0 ? 15 + trapRows * 28 : 0) + 40;
+		Rectangle grid = null;
+		for (int i = 0; i < 8; i++)
+		{
+			final Widget slot = client.getWidget(GE_GROUP, GE_FIRST_SLOT_CHILD + i);
+			if (slot == null || slot.isHidden() || slot.getBounds() == null)
+			{
+				continue;
+			}
+			final Rectangle b = slot.getBounds();
+			grid = grid == null ? new Rectangle(b) : grid.union(b);
+			if (i >= totalSlots)
+			{
+				continue; // a locked members slot is not a place to park advice
+			}
+			final GrandExchangeOffer o = i < offers.length ? offers[i] : null;
+			final boolean empty = o == null || o.getItemId() <= 0
+				|| o.getState() == GrandExchangeOfferState.EMPTY;
+			if (!empty)
+			{
+				continue; // occupied slots carry the verdict stamps
+			}
+			if (!trapCards.isEmpty())
+			{
+				final TrapBoard.Pick p = trapCards.remove(0);
+				tile(g, b, p.getName(), TRAP,
+					String.format("%s→%s · %.0fx", fmtK(p.getBuyAt()), fmtK(p.getListAt()), p.getPayoffX()),
+					overnight ? "park & log off" : "patience order");
+			}
+			else if (!quickCards.isEmpty())
+			{
+				final FlipService.Flip f = quickCards.remove(0);
+				tile(g, b, f.getName(), GOLD,
+					String.format("%,d→%,d", f.getBuyAt(), f.getSellAt()),
+					f.isInsta()
+						? String.format("+%d ⚡ now", f.getNet())
+						: String.format("+%d q~%ds", f.getNet(), f.getCycleSecs()));
+			}
+		}
 
-		g.setColor(new Color(12, 12, 18, 235));
-		g.fillRoundRect(0, 0, W, h, 10, 10);
-		g.setColor(new Color(GOLD.getRed(), GOLD.getGreen(), GOLD.getBlue(), 200));
-		g.setStroke(new BasicStroke(1.2f));
-		g.drawRoundRect(0, 0, W, h, 10, 10);
-
-		g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 15));
-		g.setColor(GOLD);
-		g.drawString("RuneAI flips", 8, 18);
-		g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 12));
-		final boolean idle = activeSlots < totalSlots;
-		g.setColor(idle ? new Color(255, 120, 100) : new Color(120, 220, 140));
-		final String stat = String.format("slots %d/%d%s · b~%ss s~%ss", activeSlots, totalSlots,
-			idle ? "!" : "✓", medBuySecs < 0 ? "?" : medBuySecs, medSellSecs < 0 ? "?" : medSellSecs);
-		g.drawString(stat, W - 8 - g.getFontMetrics().stringWidth(stat), 18);
-
-		int y = 36;
+		if (grid == null)
+		{
+			return;
+		}
+		// footer: the session line, pinned under the slot grid inside the window
+		final int fy = grid.y + grid.height + 2;
+		g.setColor(BG);
+		g.fillRoundRect(grid.x, fy, grid.width, pendingSells.isEmpty() ? 17 : 32, 6, 6);
+		g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 12));
+		g.setColor(realized >= 0 ? GAIN : LOSS);
+		final String left = String.format("%+,d · %s/h · life %s", realized, fmtK(flipGpHr), fmtK(lifetime));
+		g.drawString(left, grid.x + 6, fy + 13);
+		g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 11));
+		g.setColor(Color.LIGHT_GRAY);
+		final StringBuilder right = new StringBuilder();
+		right.append(buys).append("b·").append(sells).append("s");
+		if (medBuySecs >= 0 || medSellSecs >= 0)
+		{
+			right.append("  ");
+			if (medBuySecs >= 0)
+			{
+				right.append("b~").append(medBuySecs).append("s ");
+			}
+			if (medSellSecs >= 0)
+			{
+				right.append("s~").append(medSellSecs).append("s");
+			}
+		}
+		right.append("  T").append(traderLvl).append(" ").append((int) (traderPct * 100)).append("%");
+		final String rs = right.toString();
+		g.drawString(rs, grid.x + grid.width - 6 - g.getFontMetrics().stringWidth(rs), fy + 13);
 		if (!pendingSells.isEmpty())
 		{
-			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 12));
+			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 11));
 			g.setColor(new Color(255, 170, 60));
-			for (String ps : pendingSells)
-			{
-				g.drawString("SELL FIRST: " + trunc(ps, 30), 8, y);
-				y += 16;
-			}
+			g.drawString(fit(g, "SELL FIRST: " + String.join(" · ", pendingSells), grid.width - 12),
+				grid.x + 6, fy + 27);
 		}
-		if (shown > 0)
-		{
-			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 11));
-			g.setColor(new Color(140, 200, 255));
-			g.drawString("OFFERS", 8, y);
-			y += 15;
-			for (int i = 0; i < shown; i++)
-			{
-				final String[] ps = pos.get(i);
-				g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 13));
-				final int rightW = g.getFontMetrics().stringWidth(ps[2]);
-				g.setColor(new Color(120, 220, 140));
-				g.drawString(ps[2], W - 8 - rightW, y);
-				g.setColor("b".equals(ps[3]) ? new Color(140, 200, 255) : new Color(255, 170, 120));
-				// the name gets EVERY pixel the numbers don't need
-				g.drawString(ps[0] + " " + fit(g, ps[1], W - 22 - rightW
-					- g.getFontMetrics().stringWidth(ps[0] + " ")), 8, y);
-				y += 18;
-			}
-		}
-		if (rows > 0)
-		{
-			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 11));
-			g.setColor(GOLD);
-			g.drawString(config.flipLanes() ? "QUICK LANE" : "SUGGESTED", 8, y);
-			y += 15;
-			for (int i = 0; i < rows; i++)
-			{
-				final FlipService.Flip f = top.get(i);
-				g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 12));
-				// an insta pick fills on placement — the only "quick" that is true
-				// by construction. A queue pick says what it is and roughly how long.
-				final String rest = f.isInsta()
-					? String.format("%,d→%,d  +%d ⚡", f.getBuyAt(), f.getSellAt(), f.getNet())
-					: String.format("%,d  +%d/ea  q~%ds", f.getBuyAt(), f.getNet(), f.getCycleSecs());
-				final int restW = g.getFontMetrics().stringWidth(rest);
-				g.setColor(GOLD);
-				g.drawString(rest, W - 8 - restW, y);
-				g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 13));
-				g.setColor(Color.WHITE);
-				g.drawString(fit(g, f.getName(), W - 22 - restW), 8, y);
-				y += 18;
-			}
-		}
-
-		if (trapRows > 0)
-		{
-			// the hail-mary board: cheap tickets parked under the numbers whales type
-			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 11));
-			g.setColor(TRAP);
-			g.drawString(overnight
-				? "HEADING OFFLINE · fill every slot"
-				: "OVERNIGHT TRAPS · park & log off", 8, y);
-			y += 15;
-			for (int i = 0; i < trapRows; i++)
-			{
-				final TrapBoard.Pick p = tp.get(i);
-				g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 13));
-				final String mult = String.format("%.0fx", p.getPayoffX());
-				final int multW = g.getFontMetrics().stringWidth(mult);
-				g.setColor(TRAP);
-				g.drawString(mult, W - 8 - multW, y);
-				g.setColor(Color.WHITE);
-				g.drawString(fit(g, p.getName(), W - 22 - multW), 8, y);
-				g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 12));
-				g.setColor(GOLD);
-				g.drawString(String.format("buy %,d @ %,d  →  list @ %,d",
-					p.getQty(), p.getBuyAt(), p.getListAt()), 8, y + 14);
-				y += 28;
-			}
-		}
-
-		g.setColor(new Color(255, 255, 255, 40));
-		g.drawLine(8, y - 4, W - 8, y - 4);
-		g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 13));
-		g.setColor(realized >= 0 ? new Color(120, 220, 140) : new Color(255, 100, 100));
-		g.drawString(String.format("%+,d · %s/h · life %s", realized, fmtK(flipGpHr), fmtK(lifetime)), 8, y + 11);
-		g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 12));
-		g.setColor(Color.LIGHT_GRAY);
-		g.drawString(String.format("%db · %ds · %d✓/%d✗ · %dm · T%d %.0f%%",
-			buys, sells, sugFills, sugCancels, sessionMin, traderLvl, traderPct * 100), 8, y + 26);
-		return new Dimension(W, h);
 	}
 
-	private Dimension renderPicker(Graphics2D g)
+	/** One empty-slot card: name over the title strip, numbers in the bottom strip. */
+	private void tile(Graphics2D g, Rectangle b, String name, Color accent, String prices, String note)
 	{
-		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+		// title strip — sits over the interface's own "Empty" label, nothing clickable there
+		g.setColor(BG);
+		g.fillRect(b.x + 2, b.y + 2, b.width - 4, 16);
+		g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 11));
+		g.setColor(accent);
+		g.drawString(fit(g, name, b.width - 10), b.x + 5, b.y + 14);
+		// bottom strip — under the buy/sell buttons, over the slot's empty base
+		g.setColor(BG);
+		g.fillRect(b.x + 2, b.y + b.height - 32, b.width - 4, 30);
+		g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 11));
+		g.setColor(Color.WHITE);
+		g.drawString(fit(g, prices, b.width - 10), b.x + 5, b.y + b.height - 20);
+		g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 10));
+		g.setColor(accent);
+		g.drawString(fit(g, note, b.width - 10), b.x + 5, b.y + b.height - 7);
+	}
+
+	// ================= the search screen: what to type =================
+
+	private void renderPicker(Graphics2D g)
+	{
+		final Rectangle a = anchorRect();
 		final List<FlipService.Flip> top = flips.getTopFlips();
 		final int n = Math.min(3, top.size());
-		final int h = 40 + Math.max(1, n) * 40 + 8;
+		final int w = Math.min(340, a.width);
+		final int h = 34 + Math.max(1, n) * 34 + 6;
+		final int x = a.x + (a.width - w) / 2;
+		final int y = a.y;
 		g.setColor(new Color(12, 12, 18, 240));
-		g.fillRoundRect(0, 0, W, h, 10, 10);
+		g.fillRoundRect(x, y, w, h, 10, 10);
 		g.setColor(GOLD);
 		g.setStroke(new BasicStroke(1.6f));
-		g.drawRoundRect(0, 0, W, h, 10, 10);
-		g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 15));
-		g.drawString("TYPE ONE OF THESE:", 10, 24);
-		int y = 46;
+		g.drawRoundRect(x, y, w, h, 10, 10);
+		g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 14));
+		g.drawString("TYPE ONE OF THESE:", x + 10, y + 22);
+		int yy = y + 42;
 		if (n == 0)
 		{
 			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 13));
 			g.setColor(Color.LIGHT_GRAY);
-			g.drawString("fetching prices…", 10, y);
+			g.drawString("fetching prices…", x + 10, yy);
 		}
 		for (int i = 0; i < n; i++)
 		{
@@ -319,17 +313,202 @@ public class GeFlipOverlay extends Overlay
 			{
 				qty = Math.min(qty, Math.max(1, budget / Math.max(1, f.getBuyAt())));
 			}
-			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 15));
+			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 14));
 			g.setColor(Color.WHITE);
-			g.drawString(f.getName(), 10, y);
-			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 13));
+			g.drawString(fit(g, f.getName(), w - 20), x + 10, yy);
+			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 12));
 			g.setColor(GOLD);
-			g.drawString(String.format("buy %,d · qty %,d · +%d each · sell %,d%s",
+			g.drawString(fit(g, String.format("buy %,d · qty %,d · +%d ea · sell %,d%s",
 				f.getBuyAt(), qty, f.getNet(), f.getSellAt(),
-				f.isInsta() ? "  ⚡ fills now" : "  · queue ~" + f.getCycleSecs() + "s"), 10, y + 16);
-			y += 40;
+				f.isInsta() ? " ⚡now" : " q~" + f.getCycleSecs() + "s"), w - 20), x + 10, yy + 15);
+			yy += 34;
 		}
-		return new Dimension(W, h);
+	}
+
+	/** Where setup-screen panels anchor: the offer container, else the window. */
+	private Rectangle anchorRect()
+	{
+		final Widget cont = client.getWidget(GE_GROUP, 26);
+		if (cont != null && !cont.isHidden() && cont.getBounds() != null
+			&& cont.getBounds().width > 50)
+		{
+			return cont.getBounds();
+		}
+		final Widget ge = client.getWidget(GE_GROUP, 0);
+		return ge != null && ge.getBounds() != null ? ge.getBounds() : new Rectangle(8, 8, 400, 300);
+	}
+
+	// ================= the setup screen: the offer coach =================
+
+	/**
+	 * Drawn over the interface's item-description panel — the space the game
+	 * spends telling you a mushroom comes from a swamp. Never over the
+	 * quantity/price controls, which stay fully visible and clickable.
+	 *
+	 * <p>The one rule with teeth: a suggestion is only printed when it MAKES
+	 * money. "suggested qty 3,073 → total −15,365" is not a suggestion, it is a
+	 * coached loss, and the screen that did that gets NO MARGIN in red instead.
+	 */
+	private void renderOfferCoach(Graphics2D g, int itemId)
+	{
+		final Widget desc = client.getWidget(GE_GROUP, GE_SETUP_DESC_CHILD);
+		final Rectangle box = desc != null && !desc.isHidden() && desc.getBounds() != null
+			&& desc.getBounds().width > 50
+			? desc.getBounds()
+			: new Rectangle(anchorRect().x + 8, anchorRect().y + 30, 360, 86);
+		final int x = box.x;
+		final int w = box.width;
+		int y = box.y;
+		final int h = Math.max(box.height, 72);
+
+		g.setColor(new Color(12, 12, 18, 242));
+		g.fillRoundRect(x, y, w, h, 8, 8);
+		g.setColor(new Color(GOLD.getRed(), GOLD.getGreen(), GOLD.getBlue(), 180));
+		g.setStroke(new BasicStroke(1.2f));
+		g.drawRoundRect(x, y, w, h, 8, 8);
+
+		final long[] q = flips.quoteFor(itemId);
+		if (q == null)
+		{
+			line(g, x, y + 18, w, "no live data for this item", Color.LIGHT_GRAY, 12, false);
+			return;
+		}
+		final long buyAt = q[0], sellAt = q[1], volHr = q[2];
+		final long[] book = flips.bookFor(itemId);
+		final long iNet = book != null ? FlipService.instaNet(book[0], book[1]) : -1;
+		final int limit = flips.limitFor(itemId);
+		final long budget = flips.getBudget();
+		final boolean selling = client.getVarbitValue(4397) == 1;
+
+		if (config.trapGuard() && flips.isTrap(itemId))
+		{
+			line(g, x, y + 17, w, "THIN BOOK — no real spread", TRAP, 14, true);
+			if (book != null)
+			{
+				line(g, x, y + 34, w, String.format("sellers accept ~%,d · one buyer paid %,d", book[0], book[1]),
+					Color.LIGHT_GRAY, 12, false);
+			}
+			line(g, x, y + 50, w, String.format("~%,d traded/hr — nobody on the other side", volHr),
+				Color.LIGHT_GRAY, 12, false);
+			line(g, x, y + 67, w, "patience order only, never a flip", GOLD, 13, true);
+			return;
+		}
+
+		final int net = (int) (sellAt - FlipService.geTax((int) sellAt) - buyAt);
+		if (selling)
+		{
+			coachSell(g, x, y, w, itemId, sellAt, volHr);
+			return;
+		}
+
+		// -------- buy setup --------
+		long unsold = heldOf(itemId) + onSellOffers(itemId);
+		if (iNet > 0)
+		{
+			// the genuinely quick play: cross the spread, both sides fill now
+			line(g, x, y + 17, w, String.format("⚡ BUY at %,d · SELL at %,d — both fill now", book[1], book[0]), GOLD, 14, true);
+			long qty = Math.max(1, Math.min(limit, volHr / 10));
+			if (budget > 0)
+			{
+				qty = Math.min(qty, Math.max(1, budget / Math.max(1, book[1])));
+			}
+			line(g, x, y + 34, w, String.format("+%d each after tax · ~%,d traded/hr · limit %,d", iNet, volHr, limit),
+				GAIN, 12, false);
+			line(g, x, y + 51, w, String.format("qty %,d → +%,d gp", qty, iNet * qty), GAIN, 13, true);
+		}
+		else if (net > 0)
+		{
+			line(g, x, y + 17, w, String.format("BUY at %,d · SELL at %,d  (queue prices)", buyAt, sellAt), Color.WHITE, 14, true);
+			long qty = Math.max(1, Math.min(limit, volHr / 10));
+			if (budget > 0)
+			{
+				qty = Math.min(qty, Math.max(1, budget / Math.max(1, buyAt)));
+			}
+			line(g, x, y + 34, w, String.format("+%d each after tax · ~%,d traded/hr · limit %,d", net, volHr, limit),
+				GAIN, 12, false);
+			line(g, x, y + 51, w, String.format("qty %,d → +%,d gp · expect a wait", qty, (long) net * qty), GOLD, 13, true);
+		}
+		else
+		{
+			// NOTHING here makes money right now — say that, suggest nothing
+			final long bestNet = book != null ? Math.max(net, iNet) : net;
+			line(g, x, y + 17, w, "NO MARGIN — this item pays nothing right now", LOSS, 14, true);
+			line(g, x, y + 34, w, String.format("book %,d / %,d · after tax you LOSE %,d each", buyAt, sellAt, Math.max(1, -bestNet)),
+				Color.LIGHT_GRAY, 12, false);
+			line(g, x, y + 51, w, "skip it — the quick lane has better", GOLD, 13, true);
+		}
+		if (unsold > 0)
+		{
+			line(g, x, y + h - 6, w, String.format("⚠ %,d unsold already — sell through first", unsold), LOSS, 12, true);
+		}
+	}
+
+	private void coachSell(Graphics2D g, int x, int y, int w, int itemId, long sellAt, long volHr)
+	{
+		final long avg = flips.avgCost(itemId);
+		final long breakeven = avg >= 0 ? FlipService.breakevenSell(avg) : -1;
+		final long held = Math.max(1, heldOf(itemId));
+		final long coached = breakeven > 0 ? Math.max(sellAt, breakeven) : sellAt;
+		line(g, x, y + 17, w, String.format("SELL at %,d", coached), Color.WHITE, 14, true);
+		if (avg >= 0)
+		{
+			if (sellAt < breakeven)
+			{
+				line(g, x, y + 34, w, String.format("book %,d is UNDER your cost ~%,d (−%,d ea)", sellAt, avg,
+					avg - (sellAt - FlipService.geTax((int) sellAt))), LOSS, 12, true);
+				line(g, x, y + 51, w, String.format("ask %,d to exit clean — or hold", breakeven), GOLD, 13, true);
+			}
+			else
+			{
+				line(g, x, y + 34, w, String.format("paid ~%,d · breakeven %,d ✓", avg, breakeven), GAIN, 12, false);
+				line(g, x, y + 51, w, String.format("sell ALL %,d → %,d gp after tax", held,
+					(coached - FlipService.geTax((int) coached)) * held), GOLD, 13, true);
+			}
+		}
+		else
+		{
+			line(g, x, y + 34, w, String.format("~%,d traded/hr", volHr), Color.LIGHT_GRAY, 12, false);
+			line(g, x, y + 51, w, String.format("sell ALL %,d → %,d gp after tax", held,
+				(coached - FlipService.geTax((int) coached)) * held), GOLD, 13, true);
+		}
+	}
+
+	private void line(Graphics2D g, int x, int y, int w, String text, Color c, int size, boolean bold)
+	{
+		g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, bold ? Font.BOLD : Font.PLAIN, size));
+		g.setColor(c);
+		g.drawString(fit(g, text, w - 16), x + 8, y);
+	}
+
+	private long heldOf(int itemId)
+	{
+		long held = 0;
+		final ItemContainer inv = client.getItemContainer(InventoryID.INVENTORY);
+		if (inv != null)
+		{
+			for (Item it : inv.getItems())
+			{
+				if (it != null && it.getId() > 0 && itemManager.canonicalize(it.getId()) == itemId)
+				{
+					held += it.getQuantity();
+				}
+			}
+		}
+		return held;
+	}
+
+	private long onSellOffers(int itemId)
+	{
+		long unsold = 0;
+		for (GrandExchangeOffer of : client.getGrandExchangeOffers())
+		{
+			if (of != null && of.getItemId() == itemId
+				&& of.getState() == GrandExchangeOfferState.SELLING)
+			{
+				unsold += of.getTotalQuantity() - of.getQuantitySold();
+			}
+		}
+		return unsold;
 	}
 
 	/** Fit a name into a pixel budget: abbreviate first, ellipsize last. */
@@ -366,173 +545,5 @@ public class GeFlipOverlay extends Overlay
 			return String.format("%.1fk", v / 1_000.0);
 		}
 		return String.valueOf(v);
-	}
-
-	private Dimension renderOfferCoach(Graphics2D g, int itemId)
-	{
-		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-		final long[] q = flips.quoteFor(itemId);
-		final int h = 150;
-		g.setColor(new Color(12, 12, 18, 235));
-		g.fillRoundRect(0, 0, W, h, 10, 10);
-		g.setColor(new Color(GOLD.getRed(), GOLD.getGreen(), GOLD.getBlue(), 200));
-		g.setStroke(new BasicStroke(1.5f));
-		g.drawRoundRect(0, 0, W, h, 10, 10);
-
-		g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 16));
-		g.setColor(GOLD);
-		g.drawString(trunc(flips.nameFor(itemId), 28), 10, 24);
-
-		if (q == null)
-		{
-			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 12));
-			g.setColor(Color.LIGHT_GRAY);
-			g.drawString("no live data for this item", 10, 44);
-			return new Dimension(W, h);
-		}
-		final long buyAt = q[0], sellAt = q[1], volHr = q[2];
-		if (config.trapGuard() && flips.isTrap(itemId))
-		{
-			// The spread here is one whale's print against an empty book. Showing a
-			// "margin" would be inventing a counterparty that does not exist.
-			final long[] book = flips.bookFor(itemId);
-			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 15));
-			g.setColor(TRAP);
-			g.drawString("THIN BOOK — no real spread", 10, 50);
-			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 13));
-			g.setColor(Color.LIGHT_GRAY);
-			if (book != null)
-			{
-				g.drawString(String.format("sellers accept ~%,d · one buyer paid %,d", book[0], book[1]), 10, 74);
-			}
-			g.drawString(String.format("~%,d traded/hr — nobody is on the other side", volHr), 10, 96);
-			g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 15));
-			g.setColor(GOLD);
-			g.drawString("patience order only, never a flip", 10, 122);
-			return new Dimension(W, h);
-		}
-		final int net = (int) (sellAt - FlipService.geTax((int) sellAt) - buyAt);
-		final int limit = flips.limitFor(itemId);
-		final long budget = flips.getBudget();
-
-		// the raw book decides whether crossing the spread pays — the insta line
-		final long[] book = flips.bookFor(itemId);
-		final long iNet = book != null ? FlipService.instaNet(book[0], book[1]) : -1;
-
-		// what THIS player paid, if they are still holding it — the loss guard
-		final long avg = flips.avgCost(itemId);
-		final long breakeven = avg >= 0 ? FlipService.breakevenSell(avg) : -1;
-
-		// GE varbit 4397: 0 = buy setup, 1 = sell setup — different advice entirely
-		final boolean selling = client.getVarbitValue(4397) == 1;
-		long qty;
-		long total;
-		long unsold = 0;
-		if (!selling)
-		{
-			// allocation guard: buying MORE of something you haven't sold through
-			// concentrates capital in an unproven exit — flag it loudly
-			final ItemContainer inv2 = client.getItemContainer(InventoryID.INVENTORY);
-			if (inv2 != null)
-			{
-				for (Item it : inv2.getItems())
-				{
-					if (it != null && it.getId() > 0 && itemManager.canonicalize(it.getId()) == itemId)
-					{
-						unsold += it.getQuantity();
-					}
-				}
-			}
-			for (GrandExchangeOffer of : client.getGrandExchangeOffers())
-			{
-				if (of != null && of.getItemId() == itemId
-					&& (of.getState() == GrandExchangeOfferState.SELLING))
-				{
-					unsold += of.getTotalQuantity() - of.getQuantitySold();
-				}
-			}
-		}
-		// the price actually coached on the sell side: never below breakeven when
-		// the book still supports a profitable exit — "reprice" must not mean "lose"
-		final long coachedSell = selling && breakeven > 0 ? Math.max(sellAt, breakeven) : sellAt;
-		if (selling)
-		{
-			// selling: dump the full stack you hold at the undercut price
-			long held = 0;
-			final ItemContainer inv = client.getItemContainer(InventoryID.INVENTORY);
-			if (inv != null)
-			{
-				for (Item it : inv.getItems())
-				{
-					if (it != null && it.getId() > 0
-						&& itemManager.canonicalize(it.getId()) == itemId)
-					{
-						held += it.getQuantity();
-					}
-				}
-			}
-			qty = Math.max(1, held);
-			total = (coachedSell - FlipService.geTax((int) coachedSell)) * qty;
-		}
-		else
-		{
-			qty = Math.max(1, Math.min(limit, volHr / 10));
-			if (budget > 0)
-			{
-				qty = Math.min(qty, Math.max(1, budget / Math.max(1, buyAt)));
-			}
-			total = net * qty;
-		}
-
-		g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 15));
-		g.setColor(Color.WHITE);
-		g.drawString(selling
-			? String.format("SELL at  %,d", coachedSell)
-			: String.format("BUY at  %,d      SELL at  %,d", buyAt, sellAt), 10, 50);
-		g.setColor(net > 0 ? new Color(120, 220, 140) : new Color(255, 120, 100));
-		g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 13));
-		g.drawString(String.format("net %+,d each after tax", net), 10, 74);
-		g.setColor(Color.LIGHT_GRAY);
-		g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.PLAIN, 13));
-		g.drawString(String.format("~%,d traded/hr · buy limit %,d", volHr, limit), 10, 96);
-		g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 15));
-		g.setColor(GOLD);
-		g.drawString(selling
-			? String.format("sell ALL %,d  →  %,d gp after tax", qty, total)
-			: String.format("suggested qty %,d  →  total %+,d gp", qty, total), 10, 122);
-
-		// context line: the loss guard while selling, the insta shortcut while buying
-		g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, Font.BOLD, 12));
-		if (selling && avg >= 0)
-		{
-			if (sellAt < breakeven)
-			{
-				g.setColor(new Color(255, 100, 100));
-				g.drawString(String.format("paid ~%,d — book price %,d LOSES %,d/ea · ask %,d to profit",
-					avg, sellAt, avg - (sellAt - FlipService.geTax((int) sellAt)), breakeven), 10, 141);
-			}
-			else
-			{
-				g.setColor(new Color(120, 220, 140));
-				g.drawString(String.format("paid ~%,d · breakeven %,d ✓", avg, breakeven), 10, 141);
-			}
-		}
-		else if (!selling && unsold > 0)
-		{
-			g.setColor(new Color(255, 100, 100));
-			g.drawString(String.format("⚠ %,d unsold already — sell through first", unsold), 10, 141);
-		}
-		else if (!selling && iNet > 0)
-		{
-			g.setColor(GOLD);
-			g.drawString(String.format("⚡ INSTA: buy %,d · sell %,d · +%d each — fills now",
-				book[1], book[0], iNet), 10, 141);
-		}
-		return new Dimension(W, h);
-	}
-
-	private static String trunc(String s, int n)
-	{
-		return s.length() <= n ? s : s.substring(0, n - 1) + "…";
 	}
 }

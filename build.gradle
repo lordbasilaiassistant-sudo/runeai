@@ -23,8 +23,26 @@ dependencies {
 	annotationProcessor 'org.projectlombok:lombok:1.18.30'
 
 	testImplementation 'junit:junit:4.12'
+	testImplementation 'org.mockito:mockito-core:4.11.0'
 	testImplementation group: 'net.runelite', name:'client', version: runeLiteVersion
 	testImplementation group: 'net.runelite', name:'jshell', version: runeLiteVersion
+}
+
+// Tests must NEVER touch the real ~/.runelite — the lifecycle harness writes
+// real ledger files (offer-state, flip-basis, trader) through the same code
+// paths the plugin uses, so the whole test JVM gets a sandboxed home.
+tasks.named('test') {
+	systemProperty 'user.home', layout.buildDirectory.dir('test-home').get().asFile.absolutePath
+}
+
+// Off-client smoke test against the LIVE wiki prices API: runs the real
+// scanner, then checks the ranking's invariants (insta prices really cross the
+// spread, nets are positive, no price-tier filtering). Writes are sandboxed;
+// no RuneLite client is launched.
+tasks.register('liveScan', JavaExec) {
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'com.runeai.LiveScanHarness'
+	systemProperty 'user.home', layout.buildDirectory.dir('test-home').get().asFile.absolutePath
 }
 
 group = 'com.runeai'

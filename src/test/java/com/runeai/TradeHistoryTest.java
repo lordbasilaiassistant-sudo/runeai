@@ -217,6 +217,66 @@ public class TradeHistoryTest
 		assertTrue(e.isBought());
 	}
 
+	/**
+	 * The exact shape the live client renders (structure measured 2026-08-14,
+	 * names and numbers synthesized): the row's total leads, the tax breakdown
+	 * sits in parentheses, and the per-unit price is the number before "each".
+	 * Reading the FIRST number as "each" booked totals as unit prices and made
+	 * a 29-row history audit as a +12.2B hole.
+	 */
+	@Test
+	public void theLivePriceBlockYieldsTheEachPriceNotTheTotal()
+	{
+		final TradeHistory.Entry e = TradeHistory.parseRow(999, 500, Arrays.asList(
+			"Sold:",
+			"<col=ffb83f>Herbium</col><br>x 500",
+			"<col=ffb83f>500,000 coins</col><br><col=9f9f9f>(510,204 - 10,204)</col><br>= 1,000 each"));
+		assertEquals(500, e.getQty());
+		assertEquals(1_000, e.getUnitPrice());
+		assertFalse(e.isBought());
+	}
+
+	@Test
+	public void aLiveQuantityOneRowHasNoEachLineAndUsesTheTotal()
+	{
+		final TradeHistory.Entry e = TradeHistory.parseRow(999, 1, Arrays.asList(
+			"Sold:",
+			"<col=ffb83f>Thingium</col>",
+			"<col=ffb83f>4,900 coins</col><br><col=9f9f9f>(5,000 - 100)</col>"));
+		assertEquals(1, e.getQty());
+		assertEquals(4_900, e.getUnitPrice());
+		assertFalse(e.isBought());
+	}
+
+	@Test
+	public void aLiveBuyRowParsesTheEachPrice()
+	{
+		final TradeHistory.Entry e = TradeHistory.parseRow(999, 500, Arrays.asList(
+			"Bought:",
+			"<col=ffb83f>Herbium</col><br>x 500",
+			"<col=ffb83f>1,000,000 coins</col><br>= 2,000 each"));
+		assertEquals(2_000, e.getUnitPrice());
+		assertTrue(e.isBought());
+	}
+
+	/**
+	 * The interface divides a post-tax TOTAL by the quantity; we subtract a
+	 * per-unit tax. The two floors can land one gp apart, and a rounding
+	 * artifact must not be reported as a ledger discrepancy.
+	 */
+	@Test
+	public void sellRoundingWithinOneGpIsAgreementNotADiscrepancy()
+	{
+		final long ask = 1_588;                                   // what we booked
+		final long after = ask - FlipService.geTax((int) ask);    // 1,557
+		assertTrue(TradeHistory.priceAgrees(after, ask, false));
+		assertTrue(TradeHistory.priceAgrees(after - 1, ask, false));
+		assertTrue(TradeHistory.priceAgrees(after + 1, ask, false));
+		assertFalse(TradeHistory.priceAgrees(after - 2, ask, false));
+		// buys have no tax and therefore no rounding excuse
+		assertFalse(TradeHistory.priceAgrees(ask - 1, ask, true));
+	}
+
 	@Test
 	public void formattingTagsAndSeparatorsDoNotConfuseTheNumbers()
 	{
