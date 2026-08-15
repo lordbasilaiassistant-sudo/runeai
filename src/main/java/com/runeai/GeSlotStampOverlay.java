@@ -223,14 +223,16 @@ public class GeSlotStampOverlay extends Overlay
 				}
 			}
 
-			verdicts.put(i, (buying ? "BUY " : "SELL ") + o.getItemId() + " @" + o.getPrice()
-				+ " → " + l1 + (l2 != null ? " · " + l2 : ""));
-
 			final Rectangle b = slot.getBounds();
 			if (b == null)
 			{
+				// nothing rendered this frame — recording the verdict anyway would
+				// write "player was told X" into the audit for advice never shown
 				continue;
 			}
+
+			verdicts.put(i, (buying ? "BUY " : "SELL ") + o.getItemId() + " @" + o.getPrice()
+				+ " → " + l1 + (l2 != null ? " · " + l2 : ""));
 			// offer age timer, top-right of the slot (persists across restarts)
 			if (offerPlaced[i] > 0)
 			{

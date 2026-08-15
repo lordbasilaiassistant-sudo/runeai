@@ -167,8 +167,12 @@ public class MascotOverlay extends Overlay
 		{
 			g.setFont(g.getFont().deriveFont(Font.BOLD, 13f));
 			final FontMetrics fm = g.getFontMetrics();
-			int ty = oy - 6;
-			for (String line : wrap(saying, fm, 170))
+			// stack UPWARD from the sprite like OSRS overhead text: starting at
+			// the top and stepping down drew every line after the first across
+			// the mascot's face
+			final java.util.List<String> lines = wrap(saying, fm, 170);
+			int ty = oy - 6 - 14 * (lines.size() - 1);
+			for (String line : lines)
 			{
 				final int tx = c.getX() - fm.stringWidth(line) / 2;
 				g.setColor(Color.BLACK);

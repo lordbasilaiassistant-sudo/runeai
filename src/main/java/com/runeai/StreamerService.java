@@ -374,6 +374,14 @@ class StreamerService
 		{
 			return;
 		}
+		// validate the endpoint BEFORE consuming the reel: clearing the beats and
+		// advancing the rate limiter first meant a malformed base URL silently
+		// deleted every highlight, interval after interval, with nothing sent
+		if (okhttp3.HttpUrl.parse(chatUrl(config.streamerBaseUrl())) == null)
+		{
+			status = "endpoint is not a valid URL";
+			return;
+		}
 		final List<String> reel = new ArrayList<>(beats);
 		beats.clear();
 		beatStamps.clear();

@@ -436,26 +436,45 @@ public class GeFlipOverlay extends Overlay
 			lastCoach = String.format("item %d: INSTA buy %,d sell %,d (+%d ea)", itemId, book[1], book[0], iNet);
 			line(g, x, y + 17, w, String.format("⚡ BUY at %,d · SELL at %,d — both fill now", book[1], book[0]), GOLD, 14, true);
 			long qty = Math.max(1, Math.min(Math.min(limit, remaining), volHr / 10));
-			if (budget > 0)
-			{
-				qty = Math.min(qty, Math.max(1, budget / Math.max(1, book[1])));
-			}
+			// a budget smaller than one unit is not "qty 1" — it is an offer the
+			// player cannot place, and the old Math.max(1, …) clamp printed it as
+			// a funded-looking suggestion
+			final long affordable = budget > 0 ? budget / Math.max(1, book[1]) : -1;
 			line(g, x, y + 34, w, String.format("+%d each after tax · ~%,d traded/hr · limit left %,d%s",
 				iNet, volHr, remaining, flowNote), GAIN, 12, false);
-			line(g, x, y + 51, w, String.format("qty %,d → +%,d gp", qty, iNet * qty), GAIN, 13, true);
+			if (affordable == 0)
+			{
+				line(g, x, y + 51, w, String.format("can't fund 1 at %,d — you carry %,d gp", book[1], budget), LOSS, 13, true);
+			}
+			else
+			{
+				if (affordable > 0)
+				{
+					qty = Math.min(qty, affordable);
+				}
+				line(g, x, y + 51, w, String.format("qty %,d → +%,d gp", qty, iNet * qty), GAIN, 13, true);
+			}
 		}
 		else if (net > 0)
 		{
 			lastCoach = String.format("item %d: QUEUE buy %,d sell %,d (+%d ea)", itemId, buyAt, sellAt, net);
 			line(g, x, y + 17, w, String.format("BUY at %,d · SELL at %,d  (queue prices)", buyAt, sellAt), Color.WHITE, 14, true);
 			long qty = Math.max(1, Math.min(Math.min(limit, remaining), volHr / 10));
-			if (budget > 0)
-			{
-				qty = Math.min(qty, Math.max(1, budget / Math.max(1, buyAt)));
-			}
+			final long affordable = budget > 0 ? budget / Math.max(1, buyAt) : -1;
 			line(g, x, y + 34, w, String.format("+%d each after tax · ~%,d traded/hr · limit left %,d%s",
 				net, volHr, remaining, flowNote), GAIN, 12, false);
-			line(g, x, y + 51, w, String.format("qty %,d → +%,d gp · expect a wait", qty, (long) net * qty), GOLD, 13, true);
+			if (affordable == 0)
+			{
+				line(g, x, y + 51, w, String.format("can't fund 1 at %,d — you carry %,d gp", buyAt, budget), LOSS, 13, true);
+			}
+			else
+			{
+				if (affordable > 0)
+				{
+					qty = Math.min(qty, affordable);
+				}
+				line(g, x, y + 51, w, String.format("qty %,d → +%,d gp · expect a wait", qty, (long) net * qty), GOLD, 13, true);
+			}
 		}
 		else
 		{

@@ -94,6 +94,10 @@ class SurvivalFillModel
 		{
 			if (!FILE.exists())
 			{
+				// deleting the file un-adopts the model: keeping the stale params
+				// would leave adopted() true while the status says otherwise
+				params = null;
+				loadedStamp = -1;
 				status = "no survival file";
 				return;
 			}
