@@ -239,6 +239,16 @@ class SessionHistory
 		}
 		current.endMs = System.currentTimeMillis();
 		save();
+		// RuneLite reuses one plugin instance across enable/disable, so this
+		// object survives into the next startUp(). The finished row has to move
+		// into past — the next save() writes past + current, and a stale past
+		// would overwrite this session off the disk. It also lets a re-enable
+		// inside the gap resume THIS session instead of the one before it.
+		if (worthKeeping(current))
+		{
+			past.add(current);
+		}
+		current = null;
 	}
 
 	List<Session> completed()

@@ -23,6 +23,7 @@ public class ItemStatsTest
 		s.setEwmaFillSecs(quickSecs);
 		final ItemMemory.Lane q = new ItemMemory.Lane();
 		q.setFills(quickFills);
+		q.setTimedFills(quickFills); // these fills were watched, not offline
 		q.setTotalProfit(profit);
 		q.setEwmaFillSecs(quickSecs);
 		s.setQuick(q);
@@ -95,6 +96,21 @@ public class ItemStatsTest
 		offlineOnly.setTotalProfit(9_000);
 		mem.put(11, offlineOnly);
 		assertEquals(-1, ItemMemory.rank(mem, 10, id -> "x").get(0).getAvgFillSecs());
+
+		// same claim with the fills booked into the quick lane: an offline fill
+		// counts as a fill but never as a timing, so the 300s prior stays unsaid
+		final ItemMemory.Stats offlineQuick = new ItemMemory.Stats();
+		offlineQuick.setFills(4);
+		offlineQuick.setTotalProfit(9_000);
+		final ItemMemory.Lane q = new ItemMemory.Lane();
+		q.setFills(4);          // timedFills stays 0: durations never measured
+		q.setTotalProfit(9_000);
+		offlineQuick.setQuick(q);
+		mem.put(12, offlineQuick);
+		for (ItemMemory.ItemStat stat : ItemMemory.rank(mem, 10, id -> "x"))
+		{
+			assertEquals(-1, stat.getAvgFillSecs());
+		}
 	}
 
 	@Test
@@ -106,6 +122,7 @@ public class ItemStatsTest
 		s.setTotalProfit(250_000);
 		final ItemMemory.Lane overnight = new ItemMemory.Lane();
 		overnight.setFills(2);
+		overnight.setTimedFills(2);
 		overnight.setTotalProfit(250_000);
 		overnight.setEwmaFillSecs(28_800); // eight hours: a success in this lane
 		s.setOvernight(overnight);
