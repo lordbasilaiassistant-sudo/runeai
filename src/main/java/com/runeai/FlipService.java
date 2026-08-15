@@ -77,6 +77,10 @@ class FlipService
 	volatile double lastScanAvgErr = -1; // global market-surprise gauge, logged each scan
 	private final AtomicLong lastFast = new AtomicLong();
 	private final AtomicLong lastSlow = new AtomicLong();
+	// serialises scan computes: two OkHttp callbacks mutating the same ArrayDeque
+	// histories concurrently (a slow response overlapping the next scan) corrupt
+	// the momentum/anomaly windows for every item
+	private final Object scanLock = new Object();
 	private volatile String cachedFive;
 	private volatile long budget = -1;       // carried coins; -1 = unknown
 	private volatile boolean f2pOnly;
@@ -662,7 +666,8 @@ class FlipService
 		int spanMins;      // how far back the window the move is measured over reaches
 	}
 
-	private volatile List<Anomaly> freshAnomalies = List.of();
+	private final java.util.concurrent.atomic.AtomicReference<List<Anomaly>> freshAnomalies =
+		new java.util.concurrent.atomic.AtomicReference<>(List.of());
 	private volatile double anomalyPct = 25;
 
 	/** Move size that counts as a dislocation, from config. */
@@ -707,9 +712,9 @@ class FlipService
 	 */
 	List<Anomaly> drainAnomalies()
 	{
-		final List<Anomaly> out = freshAnomalies;
-		freshAnomalies = List.of();
-		return out;
+		// atomic swap: a read-then-overwrite here races the scan thread's
+		// publish and could silently discard a whole scan's alerts
+		return freshAnomalies.getAndSet(List.of());
 	}
 
 	static int geTax(int sellPrice)
@@ -730,11 +735,13 @@ class FlipService
 	void maybeRefresh()
 	{
 		final long now = System.currentTimeMillis();
-		if (now - lastFast.get() < FAST_MS)
+		final long prevFast = lastFast.get();
+		if (now - prevFast < FAST_MS || !lastFast.compareAndSet(prevFast, now))
 		{
+			// the CAS makes the throttle single-winner: a check-then-set let two
+			// concurrent callers both start a scan chain
 			return;
 		}
-		lastFast.set(now);
 		final boolean slowDue = now - lastSlow.get() >= SLOW_MS || cachedFive == null;
 		if (slowDue)
 		{
@@ -785,8 +792,10 @@ class FlipService
 		{
 			return;
 		}
-		get("/latest", latestBody ->
-		{
+		// one scan compute at a time: a late-arriving callback from the previous
+		// scan otherwise interleaves with this one inside the (non-thread-safe)
+		// deque histories
+		get("/latest", latestBody -> { synchronized (scanLock) {
 			// all learned artifacts load here: an OkHttp callback thread, never
 			// the client thread, and every one of them is gated on its own verdict
 			fillModel.ensureLoaded();
@@ -832,6 +841,13 @@ class FlipService
 					final long sv = v.has("lowPriceVolume") ? v.get("lowPriceVolume").getAsLong() : 0;
 					vol = bv + sv;
 					flow.put(id, new long[]{bv, sv});
+				}
+				else
+				{
+					// no row in the current 5m dump = nobody crossed in the window.
+					// Leaving the old entry made ofi() report an hours-stale
+					// imbalance as current — and recorded it into the episode corpus
+					flow.remove(id);
 				}
 				// PREDICT -> SCORE -> PUNISH: last scan forecast "mid holds";
 				// grade it now, demote items that surprised us (negative reward)
@@ -955,14 +971,14 @@ class FlipService
 			flips.sort(Comparator.comparingLong(f -> -f.gpHr));
 			allFlips = flips;
 			found.sort(Comparator.comparingDouble(a -> -Math.abs(a.movePct)));
-			freshAnomalies = found;
+			freshAnomalies.set(found);
 			itemMemory.flush(); // one write for the whole scan's memory updates
 			lastScanAvgErr = errN > 0 ? errSum / errN : -1;
 			log.info("flip scan: {} candidates, {} anomalies, market surprise {} | brain {} | champion {} | fill model {} | survival {}",
 				flips.size(), found.size(),
 				lastScanAvgErr >= 0 ? String.format("%.2f%%", lastScanAvgErr * 100) : "n/a",
 				brain.status(), champion.status(), fillModel.status(), survival.status());
-		});
+		}});
 	}
 
 	private void get(String path, java.util.function.Consumer<String> onBody)

@@ -130,12 +130,15 @@ public class RuneAIPlugin extends Plugin
 	private net.runelite.client.chat.ChatCommandManager chatCommandManager;
 
 	// trade collection log: items PROFITABLY flipped (real buy->sell) at least once
-	private final Set<Integer> tradeClog = new java.util.HashSet<>();
-	private long lastFlipGpHr;
+	private final Set<Integer> tradeClog = java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+	// volatile: the !profit / !lvl chat commands run on RuneLite's executor, not
+	// the client thread — without it those reads have no happens-before edge to
+	// the writes and a long can legally tear
+	private volatile long lastFlipGpHr;
 
 	// realized GE flip tracking (fills are post-tax in the coins we receive)
 	private final Map<Integer, long[]> flipBasis = new java.util.HashMap<>(); // id -> {qty, totalCost}
-	private long flipRealized;
+	private volatile long flipRealized;
 
 	// per-slot offer lifecycle: fill TIME is the pph lever
 	private static final class OfferTrack
@@ -192,7 +195,8 @@ public class RuneAIPlugin extends Plugin
 	private long unitsBought, unitsSold;
 	private long firstOfferMs;
 	private long sessionStartMs;
-	private long lifetimeRealized; // persists in trader.json — all-time flip profit
+	// volatile: read by the async !profit chat command off the client thread
+	private volatile long lifetimeRealized; // persists in trader.json — all-time flip profit
 	private long lastFlipScanLogMs;
 	private long lastLoginMs;
 	private int sessionFills;    // offers completed THIS session — the scoreboard's count
@@ -209,8 +213,9 @@ public class RuneAIPlugin extends Plugin
 			TRADER_XP[n] = acc / 4;
 		}
 	}
-	private double traderXp;
-	private int traderLevel = 1;
+	// volatile: read by the async !lvl chat command off the client thread
+	private volatile double traderXp;
+	private volatile int traderLevel = 1;
 
 	static int traderLevelFor(double xp)
 	{
@@ -232,6 +237,10 @@ public class RuneAIPlugin extends Plugin
 	private EventLog tickLog;
 	private EventLog episodeLog; // the offer-outcome corpus: append-only, flush per row
 	private boolean greeted;
+	// set on LOGGING_IN/HOPPING/CONNECTION_LOST, consumed by the next LOGGED_IN:
+	// distinguishes a real (re)connect from the LOADING->LOGGED_IN flap that
+	// every map-chunk boundary crossing produces
+	private boolean loginPending;
 	private int snapshotAtTick = -1;
 	private int damageTakenThisTick;
 	private final Set<Projectile> seenProjectiles = Collections.newSetFromMap(new WeakHashMap<>());
@@ -455,6 +464,7 @@ public class RuneAIPlugin extends Plugin
 		bondAnnounced = false;
 		lastHolding = null;
 		greeted = false;
+		loginPending = false;
 		snapshotAtTick = -1;
 		clogPopulated = false; // the panel is rebuilt too — it needs repopulating
 		historyReadTick = -1;
@@ -650,8 +660,19 @@ public class RuneAIPlugin extends Plugin
 		panel.setGameState(state.name());
 		emit("gameState", Map.of("state", state.name()));
 
-		if (state == GameState.LOGGED_IN)
+		// LOGGED_IN fires after EVERY LOADING — walking over a map-chunk boundary
+		// goes LOGGED_IN -> LOADING -> LOGGED_IN. Only an actual (re)connect may
+		// run the login block, or every boundary crossing re-greets, re-schedules
+		// the once-per-login snapshot, and quarantines the next 15s of live GE
+		// fills as "offline"
+		if (state == GameState.LOGGING_IN || state == GameState.HOPPING
+			|| state == GameState.CONNECTION_LOST)
 		{
+			loginPending = true;
+		}
+		if (state == GameState.LOGGED_IN && loginPending)
+		{
+			loginPending = false;
 			greeted = false;
 			lastLoginMs = System.currentTimeMillis();
 			// the reconciliation window: GE slots re-fire their states over the
@@ -666,9 +687,10 @@ public class RuneAIPlugin extends Plugin
 			lastHolding = null;
 		}
 
-		if (state != GameState.LOGGED_IN)
+		if (state != GameState.LOGGED_IN && state != GameState.LOADING)
 		{
-			// the danger window is five CONSECUTIVE ticks; a logout is not four ticks ago
+			// the danger window is five CONSECUTIVE ticks; a logout is not four
+			// ticks ago — but a scene LOAD mid-fight is not a logout either
 			dangerModel.reset();
 			dangerBoost = 0;
 		}
@@ -821,10 +843,16 @@ public class RuneAIPlugin extends Plugin
 					flipBasis.merge(o.getItemId(), new long[]{dQty, dCoins},
 						(a, b) -> new long[]{a[0] + b[0], a[1] + b[1]});
 					// the 4h buy-limit ledger counts EVERY filled unit, carryover or
-					// not — the game's window doesn't care which session bought them
+					// not — the game's window doesn't care which session bought them.
+					// An offline fill happened some time between placement and now:
+					// stamping it at login would hold the limit consumed for up to
+					// four hours past when the game already released it, so it is
+					// stamped at placement — the earliest the units can have counted
+					final long stampMs = offlineFill && tr.startMs > 0
+						? Math.min(tr.startMs, nowMs) : nowMs;
 					final java.util.ArrayDeque<long[]> win =
 						buyWindow.computeIfAbsent(o.getItemId(), k -> new java.util.ArrayDeque<>());
-					win.addLast(new long[]{nowMs, dQty});
+					win.addLast(new long[]{stampMs, dQty});
 					saveBuyWindow();
 					final Map<String, Object> bl = m();
 					bl.put("item", o.getItemId());
@@ -2630,8 +2658,12 @@ public class RuneAIPlugin extends Plugin
 	@Subscribe
 	public void onHitsplatApplied(HitsplatApplied event)
 	{
-		if (event.getActor() == client.getLocalPlayer())
+		if (event.getActor() == client.getLocalPlayer()
+			&& event.getHitsplat().getHitsplatType() != net.runelite.api.HitsplatID.HEAL)
 		{
+			// a blood fury / Redemption HEAL splat renders on the local player
+			// too — counting it as damage poisons both the live danger score and
+			// the recorded corpus the residual retrain is waiting on
 			damageTakenThisTick += event.getHitsplat().getAmount();
 		}
 		final Map<String, Object> d = m();
@@ -2739,6 +2771,10 @@ public class RuneAIPlugin extends Plugin
 	private static final int[] TRANSFER_GROUPS = {
 		net.runelite.api.gameval.InterfaceID.BANKMAIN,
 		net.runelite.api.gameval.InterfaceID.GE_OFFERS,
+		// the standalone "Collect" box from a banker/GE booth: purchases picked
+		// up through it are a transfer exactly like collecting inside GE_OFFERS,
+		// not session earnings
+		net.runelite.api.gameval.InterfaceID.GE_COLLECT,
 		net.runelite.api.gameval.InterfaceID.BANK_DEPOSITBOX,
 		net.runelite.api.gameval.InterfaceID.SHOPMAIN,
 		net.runelite.api.gameval.InterfaceID.TRADEMAIN,
@@ -2915,7 +2951,11 @@ public class RuneAIPlugin extends Plugin
 	{
 		if ("Drop".equals(event.getMenuOption()))
 		{
-			lastDropClickItemId = event.getId();
+			// for inventory item ops getId() is the small menu-op identifier, not
+			// the item id — comparing it against ItemSpawned's real item id never
+			// matched, so own drops flashed as loot and goal inference never saw
+			// a dropped gp value
+			lastDropClickItemId = event.isItemOp() ? event.getItemId() : event.getId();
 			lastDropClickTick = client.getTickCount();
 		}
 
