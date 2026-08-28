@@ -116,6 +116,15 @@ class TrapBoard
 		{
 			if (!FILE.exists())
 			{
+				// the gate is "file present": deleting it must clear the board,
+				// not leave the last load coaching from a file that is gone
+				if (!tickets.isEmpty())
+				{
+					tickets = List.of();
+					prints = 0;
+					totalOverpay = 0;
+					loadedStamp = -1;
+				}
 				return;
 			}
 			final long stamp = FILE.lastModified();

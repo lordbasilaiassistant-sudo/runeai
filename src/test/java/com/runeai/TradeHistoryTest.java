@@ -73,6 +73,27 @@ public class TradeHistoryTest
 		assertEquals(50_000, TradeHistory.netDelta(real)); // a sell we never counted
 	}
 
+	/**
+	 * The budget excuses the OLDEST unbooked rows (the tail — the interface
+	 * lists most-recent-first), never a genuinely missed recent trade at the
+	 * head.
+	 */
+	@Test
+	public void theOldestUnbookedRowsAreExcusedNotTheNewest()
+	{
+		// newest first: a real recent gap (item 111), then two pre-install trades
+		final List<TradeHistory.Entry> game = Arrays.asList(
+			sell(111, 10, 5_000), buy(453, 1000, 150), sell(561, 500, 100));
+		final List<TradeHistory.Entry> booked = Collections.singletonList(buy(999, 1, 1));
+		final List<TradeHistory.Discrepancy> diffs = TradeHistory.reconcile(game, booked);
+		assertEquals(3, diffs.size());
+		// budget = 3 game rows - 1 booked = 2: the two OLDEST are excused
+		final List<TradeHistory.Discrepancy> real =
+			TradeHistory.auditable(diffs, game.size(), booked.size());
+		assertEquals(1, real.size());
+		assertEquals("the recent gap is the reportable one", 111, real.get(0).getItemId());
+	}
+
 	/** A price disagreement is never "old" — only unbooked rows can predate us. */
 	@Test
 	public void onlyUnbookedRowsCanBeExcusedAsOld()

@@ -309,9 +309,16 @@ class TradeHistory
 			{
 				each = Long.parseLong(ea.group(1).replace(",", ""));
 			}
-			if (qty <= 0 && (t.contains("x ") || t.contains(" x")))
+			if (qty <= 0)
 			{
-				qty = nums.get(0);
+				// take the number attached to the "x", not the line's first number —
+				// an item name like "Trailblazer top (t2) x 500" leads with the 2
+				final java.util.regex.Matcher xq = java.util.regex.Pattern
+					.compile("(?:^|[^\\d])x\\s*([\\d,]+)|([\\d,]+)\\s*x(?:[^\\w]|$)").matcher(t);
+				if (xq.find())
+				{
+					qty = Long.parseLong((xq.group(1) != null ? xq.group(1) : xq.group(2)).replace(",", ""));
+				}
 			}
 		}
 		if (bought == null || qty <= 0)
@@ -436,15 +443,27 @@ class TradeHistory
 			return List.of();
 		}
 		int budget = Math.max(0, gameRows - Math.max(0, bookedRows));
-		final List<Discrepancy> out = new ArrayList<>();
-		for (Discrepancy d : diffs)
+		// rows that predate the ledger are by definition the OLDEST, and the
+		// interface lists most-recent-first (an order reconcile preserves), so
+		// the budget excuses UNBOOKED findings from the tail up — spending it on
+		// the head would excuse a genuinely missed recent trade and report a
+		// pre-install one in its place
+		final boolean[] excused = new boolean[diffs.size()];
+		for (int i = diffs.size() - 1; i >= 0 && budget > 0; i--)
 		{
-			if (d.getKind() == Kind.UNBOOKED && budget > 0)
+			if (diffs.get(i).getKind() == Kind.UNBOOKED)
 			{
+				excused[i] = true;
 				budget--;
-				continue;
 			}
-			out.add(d);
+		}
+		final List<Discrepancy> out = new ArrayList<>();
+		for (int i = 0; i < diffs.size(); i++)
+		{
+			if (!excused[i])
+			{
+				out.add(diffs.get(i));
+			}
 		}
 		return out;
 	}

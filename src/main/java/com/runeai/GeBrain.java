@@ -98,6 +98,11 @@ class GeBrain
 		{
 			if (!FILE.exists())
 			{
+				// deleting the file is the user's way of un-adopting the brain:
+				// keeping the stale net would leave adopted() true while the
+				// status says "no brain file"
+				net = null;
+				loadedStamp = -1;
 				status = "no brain file";
 				return;
 			}
@@ -123,8 +128,9 @@ class GeBrain
 				return;
 			}
 			if (p.net.W1 == null || p.net.W1.length != IN || p.net.W2 == null
-				|| p.net.b1 == null || p.net.b1.length != p.net.W1[0].length
-				|| p.net.W2.length != p.net.b1.length || p.net.b2 == null)
+				|| p.net.b1 == null || p.net.W1[0] == null || p.net.b1.length != p.net.W1[0].length
+				|| p.net.W2.length != p.net.b1.length || p.net.b2 == null
+				|| ragged(p.net))
 			{
 				net = null;
 				status = "shape mismatch";
@@ -143,6 +149,32 @@ class GeBrain
 			status = "load failed";
 			log.warn("GE brain load failed", ex);
 		}
+	}
+
+	/**
+	 * The outer lengths agreeing is not enough: a truncated or hand-edited file
+	 * can pass those and still index out of bounds inside {@code forward()} —
+	 * and that throw lands inside the 60s scan, killing candidates, anomaly
+	 * alerts and everything else the scan produces. A bad artifact must never
+	 * degrade anything but itself.
+	 */
+	private static boolean ragged(Net n)
+	{
+		for (double[] row : n.W1)
+		{
+			if (row == null || row.length != n.b1.length)
+			{
+				return true;
+			}
+		}
+		for (double[] row : n.W2)
+		{
+			if (row == null || row.length < 1)
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**

@@ -51,6 +51,7 @@ class ItemMemory
 	static class Lane
 	{
 		int fills;
+		int timedFills;         // fills whose duration was actually measured (offline fills are not)
 		int stalls;
 		int wins;               // completed sells that made money
 		int losses;             // completed sells that lost money
@@ -118,6 +119,7 @@ class ItemMemory
 		}
 		if (fillSecs >= 0) // offline fills (-1): unknown duration, skip speed stats
 		{
+			l.timedFills++;
 			l.ewmaFillSecs = l.ewmaFillSecs * (1 - ALPHA) + fillSecs * ALPHA;
 			// only the quick lane's own results are allowed to move the speed
 			// number the quick ranker reads
@@ -263,13 +265,21 @@ class ItemMemory
 		{
 			m *= 0.25; // it stopped working — back off until it re-proves
 		}
-		if (s.fills >= 2)
+		// the speed factor is keyed on MEASURED quick fills only: an item whose
+		// two fills were offline (or overnight) has an untouched 300s prior in
+		// ewmaFillSecs, and a speed rating derived from it would be fabricated
+		final int timedQuick = s.quick == null ? 0 : s.quick.timedFills;
+		if (timedQuick >= 2)
 		{
 			// confidence-weighted speed factor: measured 60s fills ~ x2,
 			// measured 10-minute fills ~ x0.4
-			final double conf = s.fills / (s.fills + 3.0);
+			final double conf = timedQuick / (timedQuick + 3.0);
 			final double speed = Math.max(0.3, Math.min(2.0, 240.0 / Math.max(30, s.ewmaFillSecs)));
 			m *= (1 - conf) + conf * speed;
+		}
+		if (s.fills >= 2)
+		{
+			// profit is known even for an untimed fill, so these stay on all fills
 			if (s.ewmaProfit > 0)
 			{
 				m *= 1.15; // it has actually paid this player before
@@ -292,7 +302,10 @@ class ItemMemory
 	long observedCycleSecs(int itemId)
 	{
 		final Stats s = memory.get(itemId);
-		if (s == null || s.fills < 2 || s.ewmaFillSecs <= 0)
+		// only timed quick fills move s.ewmaFillSecs, so only they are evidence —
+		// counting offline/overnight fills here reported the 300s prior as a measurement
+		final int timedQuick = s == null || s.quick == null ? 0 : s.quick.timedFills;
+		if (s == null || timedQuick < 2 || s.ewmaFillSecs <= 0)
 		{
 			return -1;
 		}
@@ -357,9 +370,10 @@ class ItemMemory
 			final Lane l = s.overnight == null ? new Lane() : s.overnight;
 			// the aggregate EWMA is the QUICK lane's clock by construction, so an
 			// item only ever traded overnight reports the long lane's number
-			// instead of a 300s default it never earned
-			final long avg = q.fills > 0 ? (long) s.ewmaFillSecs
-				: l.fills > 0 && l.ewmaFillSecs > 0 ? (long) l.ewmaFillSecs
+			// instead of a 300s default it never earned; a fill whose duration was
+			// never measured (offline) is not a timing either
+			final long avg = q.timedFills > 0 ? (long) s.ewmaFillSecs
+				: l.timedFills > 0 && l.ewmaFillSecs > 0 ? (long) l.ewmaFillSecs
 				: -1;
 			out.add(new ItemStat(e.getKey(), namer.apply(e.getKey()), s.fills, s.stalls,
 				avg, s.totalProfit, q.fills, l.fills, q.totalProfit, l.totalProfit));

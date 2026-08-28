@@ -99,6 +99,10 @@ class Champion
 		{
 			if (!FILE.exists())
 			{
+				// deleting the file un-adopts the genome — every getter falls
+				// back to the constant it replaced, as the gate rule requires
+				genome = null;
+				loadedStamp = -1;
 				status = "no champion file";
 				return;
 			}

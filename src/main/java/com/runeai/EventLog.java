@@ -82,7 +82,9 @@ class EventLog implements AutoCloseable
 	{
 		try
 		{
-			writer.flush();
+			// no explicit flush() first: close() flushes, and a flush that threw
+			// (disk full) skipped the close and leaked the file handle — once per
+			// log per enable/disable cycle
 			writer.close();
 		}
 		catch (IOException ex)
