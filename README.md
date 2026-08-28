@@ -215,6 +215,10 @@ RuneAI is free. If it helps you, you can support development on Ko-fi: **https:/
 
 Version 0.1.0, in active development, tested on free-to-play. Not yet submitted to the RuneLite Plugin Hub.
 
+Behaviour that has landed but has not yet been watched in a live client is listed in
+[`docs/VERIFY-IN-GAME.md`](docs/VERIFY-IN-GAME.md) — a glance-list to tick while
+playing, not a work queue.
+
 Next up:
 - Ship the trained danger model as JSON weights read by the plugin, turning the recorded ticks into a live "you're about to take damage" warning.
 - Broaden activity detection beyond the current seven activities and the current object keyword lists.
