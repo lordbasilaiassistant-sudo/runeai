@@ -31,7 +31,7 @@ plugin as one dot product per tick (no sidecar, no dependency).
 
 Usage:  py train/train_damage_model.py
 Reads:  ~/.runelite/runeai/ticks-*.jsonl
-Writes: train/damage_model.json  (baseline + weights + feature spec + verdict)
+Writes: src/main/resources/com/runeai/damage_model.json  (baseline + weights + feature spec + verdict)
         ~/.runelite/runeai/damage_model-rejected.json  (a run the guard refused;
         kept outside the repo so no recorded-data artifact lands in git)
 
@@ -53,7 +53,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 DATA_DIR = os.path.expanduser("~/.runelite/runeai")
 TICK_GLOB = os.path.join(DATA_DIR, "ticks-*.jsonl")
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "damage_model.json")
+OUT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "main", "resources", "com", "runeai", "damage_model.json"))
 REJECTED = os.path.join(DATA_DIR, "damage_model-rejected.json")
 
 HORIZON = 3       # label: damage taken within the next N ticks

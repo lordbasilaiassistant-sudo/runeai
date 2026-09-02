@@ -47,16 +47,16 @@ All source lives in `src/main/java/com/runeai/`.
 | `ItemMemory.java` | Per-item bandit memory persisted to `~/.runelite/runeai/item-memory.json`, with per-lane ledgers, recovery-based cooldown expiry, and the per-item results ranking (`rank()`). |
 | `TradeHistory.java` | Reads the in-game GE Trade History interface (read-only) and diffs it against our booked offers. Parse and reconciliation are pure statics; the widget walk is client-thread. |
 | `SessionHistory.java` | Per-session result rows in `~/.runelite/runeai/session-history.json` plus the "beat your last session" comparison math. A session RESUMES across client relaunches inside `sessionGapMins` (`resumeIfRecent`) — logging out to wait on offers is part of the session, not the end of one. All ranking is `static` and argument-fed, so it tests without a client. |
-| `FillTimeModel.java` | Dot-product inference for `train/flip_model.json`. Gated on that file's `verdict`. |
+| `FillTimeModel.java` | Dot-product inference for `src/main/resources/com/runeai/flip_model.json`. Gated on that file's `verdict`. |
 | `GeBrain.java` | 7-16-1 tanh forward pass for `~/.runelite/runeai/ge-brain-hist.json`. Gated on `metrics.beats_baseline`. Moves ranking, never a coached price. |
 | `Champion.java` | Evolved policy genome from `~/.runelite/runeai/ge-champion.json`. Gated on `emergent_edge`; every getter falls back to the constant it replaced. |
 | `TrapBoard.java` | Whale-trap history from `~/.runelite/runeai/trap-board.json` (written by `sim/whale_trap_report.py`). |
-| `DangerModel.java` | P(damage within 3 ticks) from `train/damage_model.json`. Per-activity baseline always; logistic residual only when `verdict.beats_baseline`. Its one consumer is the low-HP warning threshold. |
+| `DangerModel.java` | P(damage within 3 ticks) from `src/main/resources/com/runeai/damage_model.json`. Per-activity baseline always; logistic residual only when `verdict.beats_baseline`. Its one consumer is the low-HP warning threshold. |
 | `StreamerService.java` | **The only code in RuneAI that talks to a machine that is not the player's.** Opt-in LLM co-host: reads the `emit()` stream, builds a compact prompt, posts it to a BYO-key OpenAI-compatible endpoint, speaks the reply through the mascot. Default OFF and inert by construction. |
 | `GeFlipOverlay.java` / `GeSlotStampOverlay.java` | Draw-only GE advice, drawn INTO the GE window (both are `DYNAMIC`/`ABOVE_WIDGETS`, anchored to real widget bounds — group 465, slots at children 7–14, setup description at child 27). Empty slots become pick tiles, a footer strip under the slot grid carries the session line, the offer coach overlays the item-description panel, and verdict stamps are two clamped lines that never leave their slot. The coach NEVER prints a negative-total "suggestion" — no margin is said as NO MARGIN. Buy/sell buttons and quantity/price controls are never covered. |
 | `src/test/java/com/runeai/RuneAIPluginTest.java` | Dev launcher — `ExternalPluginManager.loadBuiltin(RuneAIPlugin.class)` then `RuneLite.main(args)`. This is `./gradlew run`'s main class. |
-| `train/train_damage_model.py` | Numpy logistic regression over recorded tick vectors → `train/damage_model.json` (P(damage within 3 ticks)). Read back by `DangerModel`. |
-| `train/train_flip_model.py` | Ridge regression on log(seconds-to-fill) → `train/flip_model.json`, judged K-fold out-of-sample. |
+| `train/train_damage_model.py` | Numpy logistic regression over recorded tick vectors → `src/main/resources/com/runeai/damage_model.json` (P(damage within 3 ticks)). Read back by `DangerModel`. |
+| `train/train_flip_model.py` | Ridge regression on log(seconds-to-fill) → `src/main/resources/com/runeai/flip_model.json`, judged K-fold out-of-sample. |
 | `runelite-plugin.properties` | Hub manifest (displayName, version, `plugins=com.runeai.RuneAIPlugin`). |
 
 ### The math
@@ -77,11 +77,11 @@ follows the same rule.
 
 | Artifact | Where | Gate field | Adopted today |
 | --- | --- | --- | --- |
-| Fill-time model | `train/flip_model.json` (bundled via `processResources`; `~/.runelite/runeai/flip_model.json` overrides) | `verdict == "adopt"` | **No** — +6.7% log-space out-of-sample, 58% worse in seconds |
+| Fill-time model | `src/main/resources/com/runeai/flip_model.json` (bundled via `processResources`; `~/.runelite/runeai/flip_model.json` overrides) | `verdict == "adopt"` | **No** — +6.7% log-space out-of-sample, 58% worse in seconds |
 | Price brain | `~/.runelite/runeai/ge-brain-hist.json` | `metrics.beats_baseline` | Yes, marginally (MSE 0.000805 vs martingale 0.000807) |
 | Champion genome | `~/.runelite/runeai/ge-champion.json` | `emergent_edge` | Yes (held-out 2,843,679 gp vs 527,095 default) |
 | Trap board | `~/.runelite/runeai/trap-board.json` | file present | Yes |
-| Danger model | `train/damage_model.json` (bundled via `processResources`; `~/.runelite/runeai/damage_model.json` overrides) | `verdict.beats_baseline` | **Baseline half only** — the residual is muted (0 held-out positives) |
+| Danger model | `src/main/resources/com/runeai/damage_model.json` (bundled via `processResources`; `~/.runelite/runeai/damage_model.json` overrides) | `verdict.beats_baseline` | **Baseline half only** — the residual is muted (0 held-out positives) |
 
 The danger model is the one artifact whose gate is **partial**, and that is
 deliberate. It has two halves with different evidential standing:
@@ -94,7 +94,7 @@ deliberate. It has two halves with different evidential standing:
   file itself carries. A retrain on a real P2P combat corpus turns it on with no
   code change.
 
-`train/damage_model.json` is **gitignored** — it is derived from recorded play.
+`src/main/resources/com/runeai/damage_model.json` is **gitignored** — it is derived from recorded play.
 `processResources` copies it into the jar when it exists, so a clean checkout
 just builds without it and the feature is inert. Never commit it.
 
@@ -268,7 +268,7 @@ confirmation. A clean JVM start is not a passing test.
 Training the danger model on locally recorded ticks:
 
 ```bash
-py train/train_damage_model.py   # reads ~/.runelite/runeai/ticks-*.jsonl, writes train/damage_model.json
+py train/train_damage_model.py   # reads ~/.runelite/runeai/ticks-*.jsonl, writes src/main/resources/com/runeai/damage_model.json
 ```
 
 (`py`, not `python`, on this machine. Needs 500+ recorded ticks or it exits early.)
@@ -374,8 +374,8 @@ crowdsourcing of other players' data.
 ## 5. Hard rules
 
 1. **Never commit recorded game data.** `~/.runelite/runeai/*.jsonl`, `snapshot-*.json`, and
-   `train/damage_model.json` are local-only — they contain account names and play history. `.gitignore`
-   already covers `*.jsonl`, `snapshot-*.json`, and `train/damage_model.json`; do not weaken it, and do
+   `src/main/resources/com/runeai/damage_model.json` are local-only — they contain account names and play history. `.gitignore`
+   already covers `*.jsonl`, `snapshot-*.json`, and `src/main/resources/com/runeai/damage_model.json`; do not weaken it, and do
    not copy recordings into the repo tree "just for a test."
 2. **Recordings stay on the player's machine.** No upload endpoint, no telemetry, no third-party server.
    Any config item that would send data off-machine must be opt-in, off by default, and carry the

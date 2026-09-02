@@ -35,7 +35,7 @@ import numpy as np
 sys.stdout.reconfigure(encoding="utf-8")
 
 EV_GLOB = os.path.expanduser("~/.runelite/runeai/events-*.jsonl")
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "flip_model.json")
+OUT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "main", "resources", "com", "runeai", "flip_model.json"))
 
 FEATURES = ["bias", "isBuy", "log10_price", "log10_qty", "hour_frac"]
 LAM = 1.0            # ridge penalty: tiny data, regularize hard

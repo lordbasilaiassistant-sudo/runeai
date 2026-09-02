@@ -26,7 +26,7 @@ Kill the running `RuneAIPluginTest` java process (or close the RuneLite window) 
 ## Hard rules
 
 1. **Never commit recorded game data** — `~/.runelite/runeai/*.jsonl`, `snapshot-*.json`,
-   `train/damage_model.json`. They contain account names and play history. Keep `.gitignore` intact.
+   `src/main/resources/com/runeai/damage_model.json`. They contain account names and play history. Keep `.gitignore` intact.
 2. **Recordings stay local.** No upload endpoint, no telemetry, no third-party server.
 3. **Never auto-submit to the RuneLite Plugin Hub** without Anthony asking for it in that session.
 4. **Never make RuneAI act for the player.** No input injection, no automated clicking, no menu entries

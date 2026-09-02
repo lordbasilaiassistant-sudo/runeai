@@ -187,7 +187,7 @@ Three kinds of file, all timestamped `yyyyMMdd-HHmmss`:
 
 **These files are local only. They are never uploaded anywhere, and they are never committed to the repo.** They are your data, on your disk. Delete the folder any time — RuneAI recreates it on next start.
 
-The tick vectors exist so a danger model can be trained on real play. `train/train_damage_model.py` reads `~/.runelite/runeai/ticks-*.jsonl` and fits a numpy logistic regression for "will I take damage within the next 3 ticks", writing `train/damage_model.json`. Run it with `py train/train_damage_model.py` (needs numpy). It refuses to train on fewer than 500 recorded ticks.
+The tick vectors exist so a danger model can be trained on real play. `train/train_damage_model.py` reads `~/.runelite/runeai/ticks-*.jsonl` and fits a numpy logistic regression for "will I take damage within the next 3 ticks", writing `src/main/resources/com/runeai/damage_model.json`. Run it with `py train/train_damage_model.py` (needs numpy). It refuses to train on fewer than 500 recorded ticks.
 
 ---
 

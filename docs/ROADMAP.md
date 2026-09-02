@@ -53,7 +53,7 @@ Everything RuneAI learns from is recorded locally first.
   players, ground items, nearby objects, non-zero varps, open widget groups, camera, and menu entries.
 
 **This data is local only and is never committed.** `.gitignore` blocks `*.jsonl`, `snapshot-*.json`, and
-`train/damage_model.json` because recordings contain account names.
+`src/main/resources/com/runeai/damage_model.json` because recordings contain account names.
 
 ### Rule-based guidance [done]
 
@@ -148,7 +148,7 @@ tick, no sidecar process and no runtime dependency.
   A positive verdict needs a real P2P combat corpus; when one exists, the retrain switches the
   sharpened correction on with no code change.
 - Toggle: `dangerModel` (default on). No trained file on disk means no behaviour change at all.
-- `train/damage_model.json` is gitignored (it is derived from recorded play) and bundled into the jar
+- `src/main/resources/com/runeai/damage_model.json` is gitignored (it is derived from recorded play) and bundled into the jar
   by `processResources` when present.
 
 ### Richer activity coverage [next]

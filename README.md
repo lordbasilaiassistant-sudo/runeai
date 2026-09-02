@@ -125,11 +125,27 @@ Three local recording streams, all written to `~/.runelite/runeai/`:
 2. **`events-<timestamp>.jsonl`** — the live event stream, one JSON object per line shaped `{"t": iso-time, "tick": n, "e": type, ...}`. Event types emitted: `gameState`, `heartbeat`, `chat`, `stat`, `hitsplat`, `death`, `animation`, `graphic`, `graphicsObject`, `projectile`, `interacting`, `container`, `pnl`, `click`, `npcSpawn`, `npcDespawn`, `playerSpawn`, `playerDespawn`, `itemSpawn`, `itemDespawn`, `varbit`.
 3. **`snapshot-<timestamp>.json`** — a full pretty-printed game-state dump written automatically 8 ticks after each login: meta/world info, local player, every entry of the RuneLite `Skill` enum with level/boosted/xp (24 skills plus `Overall` on RuneLite 1.12.35) followed by `totalLevel` and `overallXp`, inventory, equipment, bank, all NPCs, other players, ground items, nearby objects within 12 tiles, non-zero varps, open widget groups, camera, and the current menu entries.
 
-`train/train_damage_model.py` trains a v1 danger model on the recorded ticks: pure-numpy logistic regression predicting **P(take damage within the next 3 ticks)**, using 9 features (`hpFrac`, `prayFrac`, `npcCount`, `nearestDist`, `nearestAtkMe`, `nearestAnim`, `attackersOn`, `inCombatAnim`, `bias`). It needs at least 500 recorded ticks and writes weights plus metrics (test accuracy, majority baseline, AUC) to `train/damage_model.json`. The design is deliberate: exported weights are a single dot product per tick inside the Java plugin — no sidecar process, no runtime dependencies. The script's own bar is `AUC > 0.75` before the model is worth wiring in as a live warning.
+`train/train_damage_model.py` trains a v1 danger model on the recorded ticks: pure-numpy logistic regression predicting **P(take damage within the next 3 ticks)**, using 9 features (`hpFrac`, `prayFrac`, `npcCount`, `nearestDist`, `nearestAtkMe`, `nearestAnim`, `attackersOn`, `inCombatAnim`, `bias`). It needs at least 500 recorded ticks and writes weights plus metrics (test accuracy, majority baseline, AUC) to `src/main/resources/com/runeai/damage_model.json`. The design is deliberate: exported weights are a single dot product per tick inside the Java plugin — no sidecar process, no runtime dependencies. The script's own bar is `AUC > 0.75` before the model is worth wiring in as a live warning.
+
+## Install (Plugin Hub — beta)
+
+RuneAI is submitted to the [RuneLite Plugin Hub](https://runelite.net/plugin-hub) as a **beta** (version `0.1.x`). Once it is merged, installing takes no build tools at all:
+
+1. Open RuneLite.
+2. Click the **wrench** (Configuration) icon in the sidebar.
+3. Click **Plugin Hub** at the top of the panel.
+4. Search for **RuneAI** and click **Install**.
+5. Open the RuneAI config to turn features on. Everything that talks to a third-party
+   service is **off by default** — see [Data & privacy](#data--privacy).
+
+Plugin Hub plugins are not supported by the RuneLite developers. This one is early: expect
+rough edges, and please open an issue rather than assume it is you.
+
+Prefer to run the latest code, or the hub PR has not merged yet? Build from source below.
 
 ## Quick start (run from source)
 
-RuneAI is **not on the RuneLite Plugin Hub yet**, so you run it from source in RuneLite developer mode.
+Until the Plugin Hub PR merges — or any time you want the newest commit — you run RuneAI from source in RuneLite developer mode.
 
 Requirements: JDK 11+ and Git. Gradle is provided by the wrapper.
 
@@ -184,7 +200,7 @@ The RuneAI panel shows Game state, Player, detected Activity (formatted `<activi
 
 - **Everything recorded stays on your own machine.** All three streams are written to your local disk.
 - **The plugin makes no network requests.** There is no telemetry, no analytics, no upload, and no remote AI service call anywhere in the source. Voice is local WAV playback; guidance is local rule code; the danger model trains locally in numpy.
-- Recorded files can contain your account name and other players' names, so the repository's `.gitignore` excludes `*.jsonl`, `snapshot-*.json`, and `train/damage_model.json`. Recorded data is never committed.
+- Recorded files can contain your account name and other players' names, so the repository's `.gitignore` excludes `*.jsonl`, `snapshot-*.json`, and `src/main/resources/com/runeai/damage_model.json`. Recorded data is never committed.
 - To stop recording entirely, turn off **Log live events** and **Record tick vectors** and restart the plugin. To delete recordings, delete the files in `~/.runelite/runeai/`.
 
 ## FAQ

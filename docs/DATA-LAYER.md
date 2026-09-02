@@ -228,7 +228,7 @@ Labelling is done inside the trainer, per session file: for tick `i`, the label 
 ```
 Usage:  py train/train_damage_model.py
 Reads:  ~/.runelite/runeai/ticks-*.jsonl
-Writes: train/damage_model.json  (weights + feature spec + metrics)
+Writes: src/main/resources/com/runeai/damage_model.json  (weights + feature spec + metrics)
 ```
 
 The trainer refuses to run on thin data: fewer than 500 total ticks and it prints `only N ticks recorded — play more first (want 500+, ideally hours)` and exits.
@@ -286,7 +286,7 @@ That is roughly zero milliseconds per tick, adds no runtime dependency, no Pytho
 ## Privacy guarantees
 
 - **Local only.** Every file described here is written to `~/.runelite/runeai/` on your own machine — via `java.nio.file.Files`. The plugin contains no HTTP client, no telemetry, no analytics, and no upload path of any kind.
-- **Nothing is committed.** The repository `.gitignore` excludes `*.jsonl`, `snapshot-*.json`, and `train/damage_model.json`, under the comment `# recorded game data must never go public (contains account names)`.
+- **Nothing is committed.** The repository `.gitignore` excludes `*.jsonl`, `snapshot-*.json`, and `src/main/resources/com/runeai/damage_model.json`, under the comment `# recorded game data must never go public (contains account names)`.
 - **You can turn it off.** Set `recordTicks` to `false` to stop tick vectors, `logEvents` to `false` to stop the event stream, and `logVarbits` to `false` to drop varbit records from the stream. Restart the plugin for the two file switches to take effect; the varbit switch applies immediately.
 - **You can delete it.** The recordings are ordinary text files. Deleting the contents of `~/.runelite/runeai/` removes everything the plugin has ever recorded; a new session simply starts fresh files.
 - **The data is identifying.** Snapshots include your account name, skills, inventory, equipment and bank. Event streams include your chat messages. Never paste raw recordings into a public issue, Discord, or pull request.
