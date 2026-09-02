@@ -97,7 +97,7 @@ class TrapBoard
 	}
 
 	/** Re-read the board at most every 5 minutes, always off the client thread. */
-	void maybeReload()
+	void maybeReload(java.util.concurrent.ScheduledExecutorService executor)
 	{
 		final long now = System.currentTimeMillis();
 		final long prev = lastCheck.get();
@@ -105,9 +105,14 @@ class TrapBoard
 		{
 			return;
 		}
-		final Thread t = new Thread(this::load, "runeai-trapboard");
-		t.setDaemon(true);
-		t.start();
+		try
+		{
+			executor.execute(this::load);
+		}
+		catch (java.util.concurrent.RejectedExecutionException stopped)
+		{
+			lastCheck.set(prev); // nothing read the board, so don't claim we did
+		}
 	}
 
 	private void load()

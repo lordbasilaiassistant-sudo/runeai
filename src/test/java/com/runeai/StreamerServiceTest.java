@@ -74,7 +74,8 @@ public class StreamerServiceTest
 	{
 		// a plugin must never construct its own OkHttpClient; a test has no injector
 		return new StreamerService(config, new Gson(), new okhttp3.OkHttpClient(),
-			new VoicePlayer(config, new net.runelite.client.audio.AudioPlayer()));
+			new VoicePlayer(config, new net.runelite.client.audio.AudioPlayer(),
+				java.util.concurrent.Executors.newSingleThreadScheduledExecutor()));
 	}
 
 	// ================= the off switch =================

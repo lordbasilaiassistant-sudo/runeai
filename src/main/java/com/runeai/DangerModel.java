@@ -207,21 +207,27 @@ class DangerModel
 	}
 
 	/**
-	 * Start the one-shot load on a daemon thread. Safe to call from the client
-	 * thread and safe to call repeatedly; only the first call does anything.
+	 * Start the one-shot load on RuneLite's executor — a plugin does not get to
+	 * spin up its own threads. Safe to call from the client thread and safe to
+	 * call repeatedly; only the first call does anything.
 	 */
-	void loadAsync()
+	void loadAsync(java.util.concurrent.ScheduledExecutorService executor)
 	{
 		if (!loadStarted.compareAndSet(false, true))
 		{
 			return;
 		}
-		final Thread t = new Thread(this::loadNow, "runeai-danger-load");
-		t.setDaemon(true);
-		t.start();
+		try
+		{
+			executor.execute(this::loadNow);
+		}
+		catch (java.util.concurrent.RejectedExecutionException stopped)
+		{
+			loadStarted.set(false);
+		}
 	}
 
-	/** The blocking form. {@link #loadAsync()} is what the plugin calls. */
+	/** The blocking form. {@link #loadAsync} is what the plugin calls. */
 	void loadNow()
 	{
 		try

@@ -142,10 +142,6 @@ final class AsyncWriter
 			});
 			barrier.get(timeoutMs, TimeUnit.MILLISECONDS);
 		}
-		catch (InterruptedException ie)
-		{
-			Thread.currentThread().interrupt();
-		}
 		catch (Exception ex)
 		{
 			log.warn("state flush did not finish in time", ex);

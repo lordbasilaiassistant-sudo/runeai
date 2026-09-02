@@ -6,7 +6,15 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Map;
+import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import lombok.extern.slf4j.Slf4j;
@@ -92,39 +100,45 @@ class VoicePlayer
 		"bond", "You can afford a bond. Time to go members.",
 		"levelup", "Nice one. Level up!");
 
+	/** Mouth-envelope step, and the pause left between two queued lines. */
+	private static final long TICK_MS = 33;
+	private static final long BREATH_MS = 400;
+
 	private final RuneAIConfig config;
 	private final AudioPlayer audioPlayer;
+	private final ScheduledExecutorService executor;
 	private final Map<String, Long> lastPlayed = new ConcurrentHashMap<>();
 
-	// one mouth: a single-thread queue so lines can NEVER overlap
-	private volatile java.util.concurrent.ExecutorService speechQueue = newQueue();
-	private final java.util.concurrent.atomic.AtomicInteger queued =
-		new java.util.concurrent.atomic.AtomicInteger();
+	/**
+	 * A queued line. It starts itself and calls {@code done} exactly once, when
+	 * the mouth is free again — which is normally later, from a scheduled tick,
+	 * because nothing here is allowed to sit on a thread waiting for audio.
+	 */
+	private interface Line
+	{
+		void start(Runnable done);
+	}
+
+	// one mouth: a queue plus a "someone is speaking" latch, so that even though
+	// RuneLite's executor is a shared POOL, lines can never overlap
+	private final Queue<Line> pending = new ConcurrentLinkedQueue<>();
+	private final AtomicBoolean speaking = new AtomicBoolean();
+	private final AtomicInteger queued = new AtomicInteger();
+	/** The repeating task driving {@link #mouth} for the line now sounding. */
+	private volatile ScheduledFuture<?> mouthTick;
 	/** False between {@code shutdown()} and the next {@code start()} — nothing speaks. */
 	private volatile boolean running = true;
 
-	private static java.util.concurrent.ExecutorService newQueue()
-	{
-		return java.util.concurrent.Executors.newSingleThreadExecutor(r ->
-		{
-			final Thread t = new Thread(r, "runeai-voice");
-			t.setDaemon(true);
-			return t;
-		});
-	}
-
 	/**
 	 * Arm the voice. RuneLite reuses one plugin instance across enable/disable,
-	 * and so it reuses this singleton — so the queue has to be re-created when
-	 * {@link #shutdown()} has torn it down, or a re-enabled plugin is mute.
+	 * and so it reuses this singleton — so every counter has to be reset here or
+	 * a re-enabled plugin inherits a queue depth it can never work off.
 	 */
 	synchronized void start()
 	{
-		if (speechQueue.isShutdown())
-		{
-			speechQueue = newQueue();
-		}
-		queued.set(0); // tasks shutdownNow() dropped never ran their decrement
+		pending.clear();
+		queued.set(0);
+		speaking.set(false);
 		running = true;
 	}
 
@@ -133,25 +147,43 @@ class VoicePlayer
 	 * was queued or mid-playback when the player disabled RuneAI kept speaking
 	 * out of a plugin that no longer exists, and the mascot's bubble kept the
 	 * text alive with nothing left to clear it.
+	 *
+	 * <p>The executor belongs to RuneLite, so this cancels our own work rather
+	 * than shutting anything down: the mouth tick is cancelled without an
+	 * interrupt, and every queued line is dropped.
 	 */
 	synchronized void shutdown()
 	{
 		running = false;
-		speechQueue.shutdownNow(); // interrupts the playback loop's sleep
+		stopTick();
+		pending.clear();
 		queued.set(0);
+		speaking.set(false);
 		lastPlayed.clear();
 		mouth = 0f;
 		speakingText = null;
+	}
+
+	/** Cancel the mouth tick without interrupting whoever is running it. */
+	private void stopTick()
+	{
+		final ScheduledFuture<?> tick = mouthTick;
+		mouthTick = null;
+		if (tick != null)
+		{
+			tick.cancel(false);
+		}
 	}
 
 	private volatile float mouth;
 	private volatile String speakingText;
 
 	@Inject
-	VoicePlayer(RuneAIConfig config, AudioPlayer audioPlayer)
+	VoicePlayer(RuneAIConfig config, AudioPlayer audioPlayer, ScheduledExecutorService executor)
 	{
 		this.config = config;
 		this.audioPlayer = audioPlayer;
+		this.executor = executor;
 	}
 
 	/** 0..1 — how open the mascot's mouth should be right now. */
@@ -185,32 +217,84 @@ class VoicePlayer
 		}
 		lastPlayed.put(key, now);
 		queued.incrementAndGet();
-		submit(() -> speak(key));
+		submit(done -> speak(key, done));
 	}
 
 	/**
 	 * Hand a line to the queue, keeping {@link #queued} honest even when the
-	 * queue has been shut down under us by {@link #shutdown()}.
+	 * plugin was disabled under us by {@link #shutdown()}.
 	 */
-	private void submit(Runnable line)
+	private void submit(Line line)
 	{
-		try
-		{
-			speechQueue.submit(() ->
-			{
-				try
-				{
-					line.run();
-				}
-				finally
-				{
-					release();
-				}
-			});
-		}
-		catch (java.util.concurrent.RejectedExecutionException stopped)
+		if (!running)
 		{
 			release();
+			return;
+		}
+		pending.add(line);
+		try
+		{
+			executor.execute(this::pump);
+		}
+		catch (RejectedExecutionException stopped)
+		{
+			pending.clear();
+			queued.set(0);
+		}
+	}
+
+	/**
+	 * Start the next line if the mouth is free. Runs on the executor; the latch
+	 * is what keeps two lines from sounding at once on a shared pool.
+	 */
+	private void pump()
+	{
+		if (!running)
+		{
+			pending.clear();
+			return;
+		}
+		if (!speaking.compareAndSet(false, true))
+		{
+			return; // a line is sounding; its completion will pump again
+		}
+		final Line next = pending.poll();
+		if (next == null)
+		{
+			speaking.set(false);
+			return;
+		}
+		final AtomicBoolean once = new AtomicBoolean();
+		final Runnable done = () ->
+		{
+			if (once.compareAndSet(false, true))
+			{
+				lineDone();
+			}
+		};
+		try
+		{
+			next.start(done);
+		}
+		catch (Exception ex)
+		{
+			log.warn("voice line failed to start", ex);
+			done.run();
+		}
+	}
+
+	/** One line is over: give its slot back and let the next one in. */
+	private void lineDone()
+	{
+		release();
+		speaking.set(false);
+		try
+		{
+			executor.execute(this::pump);
+		}
+		catch (RejectedExecutionException stopped)
+		{
+			pending.clear();
 		}
 	}
 
@@ -220,13 +304,14 @@ class VoicePlayer
 		queued.updateAndGet(v -> Math.max(0, v - 1));
 	}
 
-	private void speak(String key)
+	private void speak(String key, Runnable done)
 	{
 		try (InputStream in = VoicePlayer.class.getResourceAsStream("/com/runeai/voice/" + key + ".wav"))
 		{
 			if (in == null)
 			{
 				log.warn("voice clip missing: {}", key);
+				done.run();
 				return;
 			}
 			final ByteArrayOutputStream bos = new ByteArrayOutputStream();
@@ -236,13 +321,18 @@ class VoicePlayer
 			if (pcm == null)
 			{
 				log.warn("voice clip is not a PCM wav: {}", key);
+				done.run();
 				return;
 			}
-			playPcm(pcm, LINES.getOrDefault(key, ""));
+			if (!playPcm(pcm, LINES.getOrDefault(key, ""), done))
+			{
+				done.run();
+			}
 		}
 		catch (Exception ex)
 		{
 			log.warn("voice playback failed for {}", key, ex);
+			done.run();
 		}
 	}
 
@@ -251,50 +341,76 @@ class VoicePlayer
 	 * bundled clips and by streamer commentary — one envelope, one mouth, so a
 	 * streamed line lip-syncs exactly the way a bundled one does.
 	 */
-	private void playPcm(Pcm pcm, String text) throws Exception
+	private boolean playPcm(Pcm pcm, String text, Runnable done)
 	{
+		final int hopFrames = Math.max(1, pcm.rate / 30);
+		final float[] env = envelope(pcm, hopFrames);
+		final int hops = env.length;
+		final long durationMs = pcm.durationMs();
+
 		try
 		{
-			final int hopFrames = Math.max(1, pcm.rate / 30);
-			final float[] env = envelope(pcm, hopFrames);
-			final int hops = env.length;
-			final long durationMs = pcm.durationMs();
-
 			// AudioPlayer only accepts a stream it can recognise, so the samples go
 			// back into a WAV container on the way out. It returns as soon as the
 			// line is started and closes the line itself when the clip ends.
 			speakingText = text;
 			audioPlayer.play(new ByteArrayInputStream(toWav(pcm)), 0f);
-
-			// no getFramePosition() to read any more: step the envelope on the
-			// clock instead, from the instant play() returned. The hop rate and
-			// the duration both come from the sample count, so the mouth still
-			// tracks this clip's own amplitude rather than a generic flap.
-			final double hopMs = 1000.0 * hopFrames / pcm.rate;
-			final long startNs = System.nanoTime();
-			try
-			{
-				long elapsedMs;
-				while ((elapsedMs = (System.nanoTime() - startNs) / 1_000_000L) < durationMs)
-				{
-					final int hop = (int) (elapsedMs / hopMs);
-					mouth = hop < hops ? env[hop] : 0f;
-					Thread.sleep(33);
-				}
-				Thread.sleep(400); // breath between queued lines
-			}
-			catch (InterruptedException interrupted)
-			{
-				// the line is self-closing and AudioPlayer kept no handle to it, so
-				// the tail of this clip will finish sounding regardless; all we can
-				// do is stop driving the mouth and let the queue drain
-				Thread.currentThread().interrupt();
-			}
 		}
-		finally
+		catch (Exception ex)
 		{
+			log.warn("voice line would not play", ex);
 			mouth = 0f;
 			speakingText = null;
+			return false;
+		}
+
+		// no getFramePosition() to read any more: step the envelope on the clock
+		// instead, from the instant play() returned. The hop rate and the duration
+		// both come from the sample count, so the mouth still tracks this clip's
+		// own amplitude rather than a generic flap.
+		//
+		// This is a repeating task rather than a sleep loop: the Plugin Hub does
+		// not allow a plugin to park a thread, and this way a disable cancels the
+		// mouth without anyone having to be interrupted out of a wait.
+		final double hopMs = 1000.0 * hopFrames / pcm.rate;
+		final long startNs = System.nanoTime();
+		try
+		{
+			mouthTick = executor.scheduleAtFixedRate(() ->
+			{
+				final long elapsedMs = (System.nanoTime() - startNs) / 1_000_000L;
+				if (!running || elapsedMs >= durationMs)
+				{
+					// the line is self-closing and AudioPlayer kept no handle to it, so
+					// on a disable the tail of this clip finishes sounding regardless;
+					// all we can do is stop driving the mouth and let the queue drain
+					endLine(done);
+					return;
+				}
+				final int hop = (int) (elapsedMs / hopMs);
+				mouth = hop < hops ? env[hop] : 0f;
+			}, 0, TICK_MS, TimeUnit.MILLISECONDS);
+		}
+		catch (RejectedExecutionException stopped)
+		{
+			endLine(done);
+		}
+		return true;
+	}
+
+	/** Clip over: stop the mouth, then leave a breath before the next line. */
+	private void endLine(Runnable done)
+	{
+		stopTick();
+		mouth = 0f;
+		speakingText = null;
+		try
+		{
+			executor.schedule(done, BREATH_MS, TimeUnit.MILLISECONDS);
+		}
+		catch (RejectedExecutionException stopped)
+		{
+			done.run();
 		}
 	}
 
@@ -445,24 +561,25 @@ class VoicePlayer
 			return;
 		}
 		queued.incrementAndGet();
-		submit(() ->
+		submit(done ->
 		{
 			try
 			{
-				if (!playAudio(text, audio, contentType))
+				if (!playAudio(text, audio, contentType, done))
 				{
-					showText(text);
+					showText(text, done);
 				}
 			}
 			catch (Exception ex)
 			{
 				log.warn("commentary playback failed", ex);
+				done.run();
 			}
 		});
 	}
 
-	/** True if the bytes actually became sound. */
-	private boolean playAudio(String text, byte[] audio, String contentType)
+	/** True if the bytes actually became sound — and then {@code done} is theirs to fire. */
+	private boolean playAudio(String text, byte[] audio, String contentType, Runnable done)
 	{
 		if (audio == null || audio.length < 2048)
 		{
@@ -472,16 +589,7 @@ class VoicePlayer
 		final Pcm container = parseWav(audio);
 		if (container != null)
 		{
-			try
-			{
-				playPcm(container, text);
-				return true;
-			}
-			catch (Exception ex)
-			{
-				log.warn("commentary wav would not play", ex);
-				return false;
-			}
+			return playPcm(container, text, done);
 		}
 		if (!isRawPcm(contentType, audio))
 		{
@@ -489,16 +597,7 @@ class VoicePlayer
 				contentType == null ? "an unlabelled format" : contentType);
 			return false;
 		}
-		try
-		{
-			playPcm(new Pcm(audio, TTS_RATE, TTS_CHANNELS, TTS_BITS), text);
-			return true;
-		}
-		catch (Exception ex)
-		{
-			log.warn("commentary audio would not play", ex);
-			return false;
-		}
+		return playPcm(new Pcm(audio, TTS_RATE, TTS_CHANNELS, TTS_BITS), text, done);
 	}
 
 	/**
@@ -544,21 +643,27 @@ class VoicePlayer
 		return b[0] != '{' && b[0] != '[';
 	}
 
-	/** No audio: hold the line in the bubble long enough to read it. */
-	private void showText(String text)
+	/**
+	 * No audio: hold the line in the bubble long enough to read it. The hold is
+	 * a scheduled clear rather than a sleep, so the mouth thread is never parked
+	 * and a disable just cancels the queue.
+	 */
+	private void showText(String text, Runnable done)
 	{
 		speakingText = text;
+		final long holdMs = Math.min(9_000L, 1_500L + text.length() * 55L);
 		try
 		{
-			Thread.sleep(Math.min(9_000L, 1_500L + text.length() * 55L));
+			executor.schedule(() ->
+			{
+				speakingText = null;
+				done.run();
+			}, holdMs, TimeUnit.MILLISECONDS);
 		}
-		catch (InterruptedException ie)
-		{
-			Thread.currentThread().interrupt();
-		}
-		finally
+		catch (RejectedExecutionException stopped)
 		{
 			speakingText = null;
+			done.run();
 		}
 	}
 }

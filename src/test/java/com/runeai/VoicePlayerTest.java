@@ -125,4 +125,67 @@ public class VoicePlayerTest
 		assertEquals("normalised to the clip's own peak", 1f, max, 1e-6);
 		assertTrue("real speech is not a flat mouth", max - min > 0.3f);
 	}
+
+	/** Read the private queue-depth counter — the thing that jams if a line never finishes. */
+	private static int depth(VoicePlayer v) throws Exception
+	{
+		final java.lang.reflect.Field f = VoicePlayer.class.getDeclaredField("queued");
+		f.setAccessible(true);
+		return ((java.util.concurrent.atomic.AtomicInteger) f.get(v)).get();
+	}
+
+	/** Wait for the queue to empty, failing rather than hanging if it never does. */
+	private static void awaitDrain(VoicePlayer v) throws Exception
+	{
+		final long deadline = System.nanoTime() + 30_000_000_000L;
+		while (depth(v) > 0)
+		{
+			if (System.nanoTime() > deadline)
+			{
+				throw new AssertionError("speech queue never drained; depth=" + depth(v));
+			}
+			java.util.concurrent.locks.LockSupport.parkNanos(20_000_000L);
+		}
+	}
+
+	/**
+	 * The playback loop no longer sleeps or gets interrupted — the Plugin Hub
+	 * allows neither — so the thing that can now break is the completion path:
+	 * a line that starts and never reports itself done leaves the mouth latched
+	 * and every later callout silently dropped. This drives real clips through
+	 * the queue twice and asserts it comes back to empty both times.
+	 */
+	@Test
+	public void everyQueuedLineReleasesTheMouth() throws Exception
+	{
+		final java.util.concurrent.ScheduledExecutorService exec =
+			java.util.concurrent.Executors.newScheduledThreadPool(2);
+		final VoicePlayer voice = new VoicePlayer(new RuneAIConfig()
+		{
+			@Override
+			public boolean voiceCallouts()
+			{
+				return true;
+			}
+		}, new net.runelite.client.audio.AudioPlayer(), exec);
+		try
+		{
+			voice.start();
+			voice.play("eat");
+			voice.play("bank");
+			awaitDrain(voice);
+			assertNull("the bubble must clear when the line ends", voice.getSpeakingText());
+			assertEquals("the mouth must close when the line ends", 0f, voice.getMouth(), 1e-6);
+
+			// and the queue is still usable afterwards, which a stuck latch would break
+			voice.play("loot");
+			awaitDrain(voice);
+			assertNull(voice.getSpeakingText());
+		}
+		finally
+		{
+			voice.shutdown();
+			exec.shutdown();
+		}
+	}
 }

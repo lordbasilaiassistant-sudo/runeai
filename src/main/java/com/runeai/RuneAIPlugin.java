@@ -129,6 +129,13 @@ public class RuneAIPlugin extends Plugin
 	@Inject
 	private net.runelite.client.chat.ChatCommandManager chatCommandManager;
 
+	/**
+	 * RuneLite's own executor. Plugins do not get to start threads, so every
+	 * off-client-thread read (the danger model, the trap board) is handed here.
+	 */
+	@Inject
+	private java.util.concurrent.ScheduledExecutorService executor;
+
 	// trade collection log: items PROFITABLY flipped (real buy->sell) at least once
 	private final Set<Integer> tradeClog = java.util.Collections.synchronizedSet(new java.util.HashSet<>());
 	// volatile: the !profit / !lvl chat commands run on RuneLite's executor, not
@@ -361,7 +368,7 @@ public class RuneAIPlugin extends Plugin
 			resumeNote = "new session";
 		}
 		voice.start(); // the queue is torn down in shutDown(); re-arm it
-		dangerModel.loadAsync(); // reads a file: never on the client thread
+		dangerModel.loadAsync(executor); // reads a file: never on the client thread
 		// the co-host is not started at all unless the player asked for it: with the
 		// toggle off nothing here ever collects a beat or builds a request
 		streamerStarted = config.streamerMode();
@@ -1266,7 +1273,7 @@ public class RuneAIPlugin extends Plugin
 			// corner of the slot budget and everything else compounds in the quick
 			// lane. Heading offline inverts that: a held slot costs nothing once you
 			// log out, so every free slot is worth parking a patience order in.
-			trapBoard.maybeReload();
+			trapBoard.maybeReload(executor);
 			final boolean offline = config.overnightMode();
 			final int trapBudget = offline
 				? slots - active
