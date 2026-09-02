@@ -1,23 +1,35 @@
 package com.runeai;
 
-import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import javax.inject.Inject;
 import javax.inject.Singleton;
-import javax.sound.sampled.AudioFormat;
-import javax.sound.sampled.AudioInputStream;
-import javax.sound.sampled.AudioSystem;
-import javax.sound.sampled.Clip;
-import javax.sound.sampled.LineEvent;
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.client.audio.AudioPlayer;
 
 /**
  * Plays premade Kokoro voice lines from bundled WAVs and exposes a live
  * mouth-openness envelope so the mascot can lip-sync to real playback.
+ *
+ * <p><b>Nothing here touches {@code javax.sound}.</b> The Plugin Hub forbids it
+ * and requires {@link AudioPlayer}, so this class parses the WAV container
+ * itself ({@link #parseWav}) and hands {@code AudioPlayer} a stream it will
+ * accept. That costs us the two things a raw {@code Clip} gave us for free:
+ *
+ * <ul>
+ *   <li>Playback position. The mouth is now driven off wall-clock time from the
+ *       moment playback starts, against a duration computed from the sample
+ *       count. Same envelope, same result, one indirection further from truth.</li>
+ *   <li>Stopping mid-line. {@code AudioPlayer}'s line is self-closing and it
+ *       hands back no handle, so {@link #shutdown()} can stop the NEXT line but
+ *       cannot cut the one already sounding; a coaching clip is ~2s, so a
+ *       disabled plugin can still be heard finishing a sentence.</li>
+ * </ul>
  */
 @Slf4j
 @Singleton
@@ -30,7 +42,45 @@ class VoicePlayer
 	 * mono at 24 kHz — byte-for-byte the shape the bundled Kokoro clips decode
 	 * to, which is why the envelope code below needs no second version.
 	 */
-	static final AudioFormat TTS_PCM = new AudioFormat(24_000f, 16, 1, true, false);
+	static final int TTS_RATE = 24_000;
+	static final int TTS_CHANNELS = 1;
+	static final int TTS_BITS = 16;
+
+	/**
+	 * Signed little-endian PCM samples plus the three numbers needed to time
+	 * them. Stands in for {@code javax.sound.sampled.AudioFormat}, which the
+	 * Plugin Hub does not allow us to name.
+	 */
+	static final class Pcm
+	{
+		final byte[] data;
+		final int rate;
+		final int channels;
+		final int bits;
+
+		Pcm(byte[] data, int rate, int channels, int bits)
+		{
+			this.data = data;
+			this.rate = rate;
+			this.channels = channels;
+			this.bits = bits;
+		}
+
+		int frameSize()
+		{
+			return Math.max(1, channels * bits / 8);
+		}
+
+		int frames()
+		{
+			return data.length / frameSize();
+		}
+
+		long durationMs()
+		{
+			return rate <= 0 ? 0 : (long) (1000.0 * frames() / rate);
+		}
+	}
 
 	static final Map<String, String> LINES = Map.of(
 		"idle", "You're idle. Click the highlighted tile.",
@@ -43,6 +93,7 @@ class VoicePlayer
 		"levelup", "Nice one. Level up!");
 
 	private final RuneAIConfig config;
+	private final AudioPlayer audioPlayer;
 	private final Map<String, Long> lastPlayed = new ConcurrentHashMap<>();
 
 	// one mouth: a single-thread queue so lines can NEVER overlap
@@ -97,9 +148,10 @@ class VoicePlayer
 	private volatile String speakingText;
 
 	@Inject
-	VoicePlayer(RuneAIConfig config)
+	VoicePlayer(RuneAIConfig config, AudioPlayer audioPlayer)
 	{
 		this.config = config;
+		this.audioPlayer = audioPlayer;
 	}
 
 	/** 0..1 — how open the mascot's mouth should be right now. */
@@ -179,13 +231,14 @@ class VoicePlayer
 			}
 			final ByteArrayOutputStream bos = new ByteArrayOutputStream();
 			in.transferTo(bos);
-			final byte[] wav = bos.toByteArray();
 
-			final AudioInputStream ais = AudioSystem.getAudioInputStream(
-				new BufferedInputStream(new ByteArrayInputStream(wav)));
-			final ByteArrayOutputStream pcmBos = new ByteArrayOutputStream();
-			ais.transferTo(pcmBos);
-			playPcm(pcmBos.toByteArray(), ais.getFormat(), LINES.getOrDefault(key, ""));
+			final Pcm pcm = parseWav(bos.toByteArray());
+			if (pcm == null)
+			{
+				log.warn("voice clip is not a PCM wav: {}", key);
+				return;
+			}
+			playPcm(pcm, LINES.getOrDefault(key, ""));
 		}
 		catch (Exception ex)
 		{
@@ -198,59 +251,33 @@ class VoicePlayer
 	 * bundled clips and by streamer commentary — one envelope, one mouth, so a
 	 * streamed line lip-syncs exactly the way a bundled one does.
 	 */
-	private void playPcm(byte[] pcm, AudioFormat fmt, String text) throws Exception
+	private void playPcm(Pcm pcm, String text) throws Exception
 	{
 		try
 		{
-			// amplitude envelope: one value per ~33ms hop, normalized to peak
-			final int frameBytes = Math.max(1, fmt.getFrameSize());
-			final int hopFrames = Math.max(1, (int) (fmt.getFrameRate() / 30));
-			final int hops = Math.max(1, pcm.length / frameBytes / hopFrames);
-			final float[] env = new float[hops];
-			float peak = 1;
-			for (int h = 0; h < hops; h++)
-			{
-				double sum = 0;
-				final int start = h * hopFrames;
-				for (int i = 0; i < hopFrames; i++)
-				{
-					final int off = (start + i) * frameBytes;
-					if (off + 1 >= pcm.length)
-					{
-						break;
-					}
-					final short s = (short) ((pcm[off] & 0xff) | (pcm[off + 1] << 8));
-					sum += (double) s * s;
-				}
-				env[h] = (float) Math.sqrt(sum / hopFrames);
-				peak = Math.max(peak, env[h]);
-			}
-			for (int h = 0; h < hops; h++)
-			{
-				env[h] /= peak;
-			}
+			final int hopFrames = Math.max(1, pcm.rate / 30);
+			final float[] env = envelope(pcm, hopFrames);
+			final int hops = env.length;
+			final long durationMs = pcm.durationMs();
 
-			final Clip clip = AudioSystem.getClip();
-			clip.addLineListener(e ->
-			{
-				if (e.getType() == LineEvent.Type.STOP)
-				{
-					clip.close();
-				}
-			});
-			clip.open(fmt, pcm, 0, pcm.length);
+			// AudioPlayer only accepts a stream it can recognise, so the samples go
+			// back into a WAV container on the way out. It returns as soon as the
+			// line is started and closes the line itself when the clip ends.
 			speakingText = text;
-			clip.start();
+			audioPlayer.play(new ByteArrayInputStream(toWav(pcm)), 0f);
 
-			// drive the mouth from actual playback position. The clip plays on the
-			// mixer's own thread, so an interrupt here has to close the line
-			// explicitly — otherwise shutdown() returns and the plugin keeps
-			// talking out of a disabled plugin until the clip runs out.
+			// no getFramePosition() to read any more: step the envelope on the
+			// clock instead, from the instant play() returned. The hop rate and
+			// the duration both come from the sample count, so the mouth still
+			// tracks this clip's own amplitude rather than a generic flap.
+			final double hopMs = 1000.0 * hopFrames / pcm.rate;
+			final long startNs = System.nanoTime();
 			try
 			{
-				while (clip.isOpen())
+				long elapsedMs;
+				while ((elapsedMs = (System.nanoTime() - startNs) / 1_000_000L) < durationMs)
 				{
-					final int hop = clip.getFramePosition() / hopFrames;
+					final int hop = (int) (elapsedMs / hopMs);
 					mouth = hop < hops ? env[hop] : 0f;
 					Thread.sleep(33);
 				}
@@ -258,9 +285,10 @@ class VoicePlayer
 			}
 			catch (InterruptedException interrupted)
 			{
+				// the line is self-closing and AudioPlayer kept no handle to it, so
+				// the tail of this clip will finish sounding regardless; all we can
+				// do is stop driving the mouth and let the queue drain
 				Thread.currentThread().interrupt();
-				clip.stop();
-				clip.close();
 			}
 		}
 		finally
@@ -268,6 +296,131 @@ class VoicePlayer
 			mouth = 0f;
 			speakingText = null;
 		}
+	}
+
+	/** Per-hop RMS amplitude, normalized to the clip's own peak. 0..1. */
+	static float[] envelope(Pcm pcm, int hopFrames)
+	{
+		final int frameBytes = pcm.frameSize();
+		final int hops = Math.max(1, pcm.data.length / frameBytes / hopFrames);
+		final float[] env = new float[hops];
+		if (pcm.bits != 16)
+		{
+			// the bundled clips and the TTS contract are both 16-bit; anything else
+			// still plays, it just gets a steady mouth instead of a synced one
+			java.util.Arrays.fill(env, 0.5f);
+			return env;
+		}
+		float peak = 1;
+		for (int h = 0; h < hops; h++)
+		{
+			double sum = 0;
+			final int start = h * hopFrames;
+			for (int i = 0; i < hopFrames; i++)
+			{
+				final int off = (start + i) * frameBytes;
+				if (off + 1 >= pcm.data.length)
+				{
+					break;
+				}
+				final short s = (short) ((pcm.data[off] & 0xff) | (pcm.data[off + 1] << 8));
+				sum += (double) s * s;
+			}
+			env[h] = (float) Math.sqrt(sum / hopFrames);
+			peak = Math.max(peak, env[h]);
+		}
+		for (int h = 0; h < hops; h++)
+		{
+			env[h] /= peak;
+		}
+		return env;
+	}
+
+	/**
+	 * Read a RIFF/WAVE container into samples. Returns null for anything that is
+	 * not uncompressed PCM — a compressed body played as samples is a scream in
+	 * the player's headphones, so "I don't recognise this" must never fall
+	 * through to "play it anyway".
+	 */
+	static Pcm parseWav(byte[] wav)
+	{
+		if (wav == null || wav.length < 44
+			|| wav[0] != 'R' || wav[1] != 'I' || wav[2] != 'F' || wav[3] != 'F'
+			|| wav[8] != 'W' || wav[9] != 'A' || wav[10] != 'V' || wav[11] != 'E')
+		{
+			return null;
+		}
+		final ByteBuffer bb = ByteBuffer.wrap(wav).order(ByteOrder.LITTLE_ENDIAN);
+		int rate = 0;
+		int channels = 0;
+		int bits = 0;
+		boolean sawFmt = false;
+		int p = 12;
+		while (p + 8 <= wav.length)
+		{
+			final String id = "" + (char) wav[p] + (char) wav[p + 1] + (char) wav[p + 2] + (char) wav[p + 3];
+			final int size = bb.getInt(p + 4);
+			final int body = p + 8;
+			if (size < 0 || body + size > wav.length)
+			{
+				// a truncated or hostile chunk length: take the data we can see
+				if ("data".equals(id) && sawFmt && body < wav.length)
+				{
+					return pcmOf(wav, body, wav.length - body, rate, channels, bits);
+				}
+				return null;
+			}
+			if ("fmt ".equals(id) && size >= 16)
+			{
+				if (bb.getShort(body) != 1) // 1 == WAVE_FORMAT_PCM
+				{
+					return null;
+				}
+				channels = bb.getShort(body + 2);
+				rate = bb.getInt(body + 4);
+				bits = bb.getShort(body + 14);
+				sawFmt = true;
+			}
+			else if ("data".equals(id) && sawFmt)
+			{
+				return pcmOf(wav, body, size, rate, channels, bits);
+			}
+			p = body + size + (size & 1); // chunks are word-aligned
+		}
+		return null;
+	}
+
+	private static Pcm pcmOf(byte[] wav, int off, int len, int rate, int channels, int bits)
+	{
+		if (rate <= 0 || channels <= 0 || bits <= 0 || len <= 0)
+		{
+			return null;
+		}
+		final byte[] data = new byte[len];
+		System.arraycopy(wav, off, data, 0, len);
+		return new Pcm(data, rate, channels, bits);
+	}
+
+	/** Wrap samples in a 44-byte canonical WAV header so AudioPlayer accepts them. */
+	static byte[] toWav(Pcm pcm)
+	{
+		final int frameSize = pcm.frameSize();
+		final int byteRate = pcm.rate * frameSize;
+		final ByteBuffer bb = ByteBuffer.allocate(44 + pcm.data.length).order(ByteOrder.LITTLE_ENDIAN);
+		bb.put("RIFF".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+		bb.putInt(36 + pcm.data.length);
+		bb.put("WAVEfmt ".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+		bb.putInt(16);
+		bb.putShort((short) 1); // PCM
+		bb.putShort((short) pcm.channels);
+		bb.putInt(pcm.rate);
+		bb.putInt(byteRate);
+		bb.putShort((short) frameSize);
+		bb.putShort((short) pcm.bits);
+		bb.put("data".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+		bb.putInt(pcm.data.length);
+		bb.put(pcm.data);
+		return bb.array();
 	}
 
 	/**
@@ -315,19 +468,20 @@ class VoicePlayer
 		{
 			return false;
 		}
-		try
+		// a service that ignored the format we asked for and sent a real WAV back
+		final Pcm container = parseWav(audio);
+		if (container != null)
 		{
-			final AudioInputStream ais = AudioSystem.getAudioInputStream(
-				new BufferedInputStream(new ByteArrayInputStream(audio)));
-			final ByteArrayOutputStream out = new ByteArrayOutputStream();
-			ais.transferTo(out);
-			playPcm(out.toByteArray(), ais.getFormat(), text);
-			return true;
-		}
-		catch (Exception notAContainer)
-		{
-			// expected: we ASK the TTS service for raw signed 16-bit mono PCM, which
-			// has no header for AudioSystem to recognise
+			try
+			{
+				playPcm(container, text);
+				return true;
+			}
+			catch (Exception ex)
+			{
+				log.warn("commentary wav would not play", ex);
+				return false;
+			}
 		}
 		if (!isRawPcm(contentType, audio))
 		{
@@ -337,7 +491,7 @@ class VoicePlayer
 		}
 		try
 		{
-			playPcm(audio, TTS_PCM, text);
+			playPcm(new Pcm(audio, TTS_RATE, TTS_CHANNELS, TTS_BITS), text);
 			return true;
 		}
 		catch (Exception ex)
