@@ -1,0 +1,122 @@
+{
+  "version": 2,
+  "horizonTicks": 3,
+  "historyTicks": 5,
+  "features": [
+    "hpFrac",
+    "recentDmg",
+    "recentHit",
+    "prayFrac",
+    "npcCount",
+    "nearestDist",
+    "nearestAtkMe",
+    "nearestAnim",
+    "nearestHasHp",
+    "attackersOn",
+    "attackerAdjacent",
+    "inCombatAnim",
+    "hasTarget",
+    "moving",
+    "bias"
+  ],
+  "featureDoc": {
+    "hpFrac": "boosted HITPOINTS / real HITPOINTS",
+    "recentDmg": "sum of dmgTaken over this tick and the previous 4, / hpMax, capped at 1",
+    "recentHit": "1 if any dmgTaken > 0 over this tick and the previous 4",
+    "prayFrac": "boosted PRAYER / hpMax, capped at 1",
+    "npcCount": "number of named NPCs in the scene / 10, capped at 1",
+    "nearestDist": "distance to the nearest NPC / 10, capped at 1 (30 if no NPC)",
+    "nearestAtkMe": "1 if the nearest NPC is interacting with the local player",
+    "nearestAnim": "1 if the nearest NPC's animation != -1",
+    "nearestHasHp": "1 if the nearest NPC's health ratio >= 0 (health bar visible)",
+    "attackersOn": "count of NPCs interacting with the player / 5, capped at 1",
+    "attackerAdjacent": "1 if any NPC interacting with the player is within 1 tile",
+    "inCombatAnim": "1 if the local player's animation != -1",
+    "hasTarget": "1 if the player is interacting with an NPC",
+    "moving": "1 if the player's world position differs from the previous tick",
+    "bias": "constant 1.0"
+  },
+  "weights": [
+    -0.09744207762277718,
+    -0.0006745875309027739,
+    -0.021968840568478722,
+    0.0,
+    -0.10896124990505747,
+    -0.05941868561220354,
+    0.329261441573659,
+    -0.04890820530326102,
+    0.37727170092106016,
+    0.03774089698659518,
+    0.2981490357748518,
+    0.1181710780396382,
+    0.46262996814407853,
+    -0.05162170121297202,
+    -0.4061679665693382
+  ],
+  "gain": 0.0,
+  "baselineGlobal": 0.0013058239749281796,
+  "baselineByActivity": {
+    "none": 0.0005924644961190041,
+    "Combat": 0.00845768474427912,
+    "Prayer": 0.0006159547051548018
+  },
+  "baselinePriorK": 200.0,
+  "corpus": {
+    "sessions": 38,
+    "ticks": 24078,
+    "positives": 15,
+    "posRate": 0.000622975330176925,
+    "membersTicks": 12478,
+    "membersPositives": 0,
+    "byActivity": {
+      "Combat": {
+        "ticks": 895,
+        "positives": 9,
+        "posRate": 0.01005586592178771
+      },
+      "Prayer": {
+        "ticks": 224,
+        "positives": 0,
+        "posRate": 0.0
+      },
+      "none": {
+        "ticks": 22959,
+        "positives": 6,
+        "posRate": 0.00026133542401672545
+      }
+    }
+  },
+  "split": {
+    "train": {
+      "ticks": 11487,
+      "positives": 15
+    },
+    "val": {
+      "ticks": 6291,
+      "positives": 0
+    },
+    "test": {
+      "ticks": 6300,
+      "positives": 0
+    }
+  },
+  "metrics": {
+    "baselineLogLoss": 0.0005926400725605939,
+    "modelLogLoss": 0.0005926400725605939,
+    "baselineBrier": 3.510141791615454e-07,
+    "modelBrier": 3.510141791615454e-07,
+    "baselineAUC": null,
+    "modelAUC": null
+  },
+  "arena": {
+    "ticks": 24078,
+    "testPositives": 0
+  },
+  "verdict": {
+    "beats_baseline": false,
+    "margin": 0.0,
+    "metric": "held-out log loss (baseline - model; > 0 = model better)",
+    "minTestPositives": 20,
+    "reason": "held-out slice holds 0 positive labels (< 20) \u2014 no verdict is measurable on this corpus, whatever the loss says"
+  }
+}

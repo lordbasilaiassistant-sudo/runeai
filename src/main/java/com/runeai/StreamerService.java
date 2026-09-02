@@ -377,9 +377,19 @@ class StreamerService
 		// validate the endpoint BEFORE consuming the reel: clearing the beats and
 		// advancing the rate limiter first meant a malformed base URL silently
 		// deleted every highlight, interval after interval, with nothing sent
-		if (okhttp3.HttpUrl.parse(chatUrl(config.streamerBaseUrl())) == null)
+		final okhttp3.HttpUrl parsed = okhttp3.HttpUrl.parse(chatUrl(config.streamerBaseUrl()));
+		if (parsed == null)
 		{
 			status = "endpoint is not a valid URL";
+			return;
+		}
+		// https or nothing. Every request carries the user's API key in an
+		// Authorization header and the session text in the body; over plaintext
+		// http both are readable by anything on the path. HttpUrl.parse happily
+		// accepts http://, so the scheme has to be checked separately.
+		if (!"https".equals(parsed.scheme()))
+		{
+			status = "endpoint must be https — refusing to send your key in plaintext";
 			return;
 		}
 		final List<String> reel = new ArrayList<>(beats);

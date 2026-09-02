@@ -286,7 +286,7 @@ That is roughly zero milliseconds per tick, adds no runtime dependency, no Pytho
 ## Privacy guarantees
 
 - **Local only.** Every file described here is written to `~/.runelite/runeai/` on your own machine — via `java.nio.file.Files`. The plugin contains no HTTP client, no telemetry, no analytics, and no upload path of any kind.
-- **Nothing is committed.** The repository `.gitignore` excludes `*.jsonl`, `snapshot-*.json`, and `src/main/resources/com/runeai/damage_model.json`, under the comment `# recorded game data must never go public (contains account names)`.
+- **No recording is committed.** The repository `.gitignore` excludes `*.jsonl` and `snapshot-*.json`, under the comment `# recorded game data must never go public (contains account names)`. The trained models derived from those recordings (`src/main/resources/com/runeai/{damage,flip}_model.json`) are committed and ship in the jar — they carry weights, feature docs and aggregate corpus counts, and none of the underlying play.
 - **You can turn it off.** Set `recordTicks` to `false` to stop tick vectors, `logEvents` to `false` to stop the event stream, and `logVarbits` to `false` to drop varbit records from the stream. Restart the plugin for the two file switches to take effect; the varbit switch applies immediately.
 - **You can delete it.** The recordings are ordinary text files. Deleting the contents of `~/.runelite/runeai/` removes everything the plugin has ever recorded; a new session simply starts fresh files.
 - **The data is identifying.** Snapshots include your account name, skills, inventory, equipment and bank. Event streams include your chat messages. Never paste raw recordings into a public issue, Discord, or pull request.

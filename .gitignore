@@ -10,5 +10,4 @@ nbproject/
 # recorded game data must never go public (contains account names)
 *.jsonl
 snapshot-*.json
-src/main/resources/com/runeai/damage_model.json
 __pycache__/

@@ -349,7 +349,7 @@ public interface RuneAIConfig extends Config
 	@ConfigItem(
 		keyName = "streamerBaseUrl",
 		name = "LLM base URL",
-		description = "Any OpenAI-compatible chat-completions endpoint, e.g. https://api.groq.com/openai/v1 or https://api.openai.com/v1. Blank means the co-host stays silent no matter what else is set",
+		description = "Any OpenAI-compatible chat-completions endpoint, e.g. https://api.groq.com/openai/v1 or https://api.openai.com/v1. Must be https — a plaintext http:// endpoint is refused, because every request carries your API key. Blank means the co-host stays silent no matter what else is set",
 		section = STREAMER,
 		position = 102
 	)

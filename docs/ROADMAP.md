@@ -148,8 +148,9 @@ tick, no sidecar process and no runtime dependency.
   A positive verdict needs a real P2P combat corpus; when one exists, the retrain switches the
   sharpened correction on with no code change.
 - Toggle: `dangerModel` (default on). No trained file on disk means no behaviour change at all.
-- `src/main/resources/com/runeai/damage_model.json` is gitignored (it is derived from recorded play) and bundled into the jar
-  by `processResources` when present.
+- `src/main/resources/com/runeai/damage_model.json` is committed and bundled into the jar as an
+  ordinary resource. It holds weights and aggregate corpus counts only — none of the recorded play
+  it was derived from.
 
 ### Richer activity coverage [next]
 

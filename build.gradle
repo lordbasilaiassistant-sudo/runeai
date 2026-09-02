@@ -59,10 +59,11 @@ tasks.withType(JavaCompile).configureEach {
 // processResources step is silently discarded and the model would be missing
 // from the published jar. The trainers write straight into that directory.
 //
-// damage_model.json is gitignored -- it is derived from recorded play, so it
-// only exists on a machine where the trainer has been run. A clean checkout
-// simply builds without it and the danger prior stays inert; nothing here ever
-// puts it in a commit.
+// Both files ARE committed. They are derived from recorded play but contain
+// none of it: weights, feature docs and aggregate corpus counts only, with no
+// account names, positions or timestamps. Committing them is what makes the
+// danger prior and the fill-time model live for Plugin Hub users instead of
+// inert. The recordings themselves stay gitignored and local.
 
 tasks.register('run', JavaExec) {
 	classpath = sourceSets.test.runtimeClasspath

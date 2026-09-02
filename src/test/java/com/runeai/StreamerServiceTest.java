@@ -116,6 +116,22 @@ public class StreamerServiceTest
 	}
 
 	@Test
+	public void aPlaintextEndpointIsRefusedAndTheReelIsKept()
+	{
+		// every request carries the user's API key in an Authorization header;
+		// http:// would put it, and the session text, on the wire in the clear
+		final StreamerService s = service(cfg(true, "http://api.groq.com/openai/v1", "sk-live"));
+		s.start();
+		s.observe("levelUp", map("skill", "Fishing", "level", 62), NAMES);
+		assertEquals(1, s.pendingBeats());
+
+		s.tick(System.currentTimeMillis());
+		assertEquals("nothing may be sent over plaintext", 0, s.spokenLines());
+		assertTrue(s.status(), s.status().contains("https"));
+		assertEquals("a refused beat is kept, not consumed", 1, s.pendingBeats());
+	}
+
+	@Test
 	public void aKeyWithoutAnEndpointIsStillUnconfigured()
 	{
 		assertFalse(service(cfg(true, "   ", "sk-live")).configured());

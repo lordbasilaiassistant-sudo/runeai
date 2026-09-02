@@ -200,7 +200,7 @@ The RuneAI panel shows Game state, Player, detected Activity (formatted `<activi
 
 - **Everything recorded stays on your own machine.** All three streams are written to your local disk.
 - **The plugin makes no network requests.** There is no telemetry, no analytics, no upload, and no remote AI service call anywhere in the source. Voice is local WAV playback; guidance is local rule code; the danger model trains locally in numpy.
-- Recorded files can contain your account name and other players' names, so the repository's `.gitignore` excludes `*.jsonl`, `snapshot-*.json`, and `src/main/resources/com/runeai/damage_model.json`. Recorded data is never committed.
+- Recorded files can contain your account name and other players' names, so the repository's `.gitignore` excludes `*.jsonl` and `snapshot-*.json`. Recorded data is never committed. The trained models that ship in the plugin (`damage_model.json`, `flip_model.json`) are committed, and hold only weights and aggregate counts — no names, no positions, no timestamps.
 - To stop recording entirely, turn off **Log live events** and **Record tick vectors** and restart the plugin. To delete recordings, delete the files in `~/.runelite/runeai/`.
 
 ## FAQ

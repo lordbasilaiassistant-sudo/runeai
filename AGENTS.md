@@ -94,9 +94,13 @@ deliberate. It has two halves with different evidential standing:
   file itself carries. A retrain on a real P2P combat corpus turns it on with no
   code change.
 
-`src/main/resources/com/runeai/damage_model.json` is **gitignored** — it is derived from recorded play.
-`processResources` copies it into the jar when it exists, so a clean checkout
-just builds without it and the feature is inert. Never commit it.
+`src/main/resources/com/runeai/damage_model.json` **is committed** and ships in the
+jar as an ordinary resource. It is derived from recorded play but contains none
+of it — weights, feature docs and aggregate corpus counts, no account names, no
+positions, no timestamps. It has to be committed or the danger prior is inert
+for every Plugin Hub user. A clean checkout without it still builds; the feature
+just does nothing. Re-check the file for identifiers if the trainer's output
+shape ever changes.
 
 Two rules that are easy to get wrong:
 
@@ -373,10 +377,11 @@ crowdsourcing of other players' data.
 
 ## 5. Hard rules
 
-1. **Never commit recorded game data.** `~/.runelite/runeai/*.jsonl`, `snapshot-*.json`, and
-   `src/main/resources/com/runeai/damage_model.json` are local-only — they contain account names and play history. `.gitignore`
-   already covers `*.jsonl`, `snapshot-*.json`, and `src/main/resources/com/runeai/damage_model.json`; do not weaken it, and do
-   not copy recordings into the repo tree "just for a test."
+1. **Never commit recorded game data.** `~/.runelite/runeai/*.jsonl` and `snapshot-*.json` are
+   local-only — they contain account names and play history. `.gitignore` already covers `*.jsonl`
+   and `snapshot-*.json`; do not weaken it, and do not copy recordings into the repo tree "just for
+   a test." The trained models (`src/main/resources/com/runeai/{damage,flip}_model.json`) are the
+   deliberate exception and are committed — see §"Trained models" above for why they are safe.
 2. **Recordings stay on the player's machine.** No upload endpoint, no telemetry, no third-party server.
    Any config item that would send data off-machine must be opt-in, off by default, and carry the
    RuneLite third-party-server warning string.
