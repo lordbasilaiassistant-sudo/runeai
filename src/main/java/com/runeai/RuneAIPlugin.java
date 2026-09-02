@@ -367,6 +367,7 @@ public class RuneAIPlugin extends Plugin
 			sessionHistory.begin(sessionStartMs);
 			resumeNote = "new session";
 		}
+		AsyncWriter.init(executor); // state writes borrow RuneLite's executor, never a thread of ours
 		voice.start(); // the queue is torn down in shutDown(); re-arm it
 		dangerModel.loadAsync(executor); // reads a file: never on the client thread
 		// the co-host is not started at all unless the player asked for it: with the

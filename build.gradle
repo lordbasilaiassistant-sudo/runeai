@@ -50,6 +50,9 @@ group = 'com.runeai'
 tasks.withType(JavaCompile).configureEach {
 	options.encoding = 'UTF-8'
 	options.release.set(11)
+	if (project.hasProperty('lintDeprecation')) {
+		options.compilerArgs << '-Xlint:deprecation'
+	}
 }
 
 // Trained models ship with the plugin as ordinary resources in
